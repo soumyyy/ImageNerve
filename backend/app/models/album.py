@@ -1,0 +1,1 @@
+# Album Pydantic schema placeholder 

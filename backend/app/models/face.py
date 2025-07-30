@@ -1,0 +1,1 @@
+# Face Pydantic schema placeholder 

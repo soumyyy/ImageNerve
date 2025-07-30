@@ -1,0 +1,1 @@
+# QR Pydantic schema placeholder 

@@ -1,0 +1,42 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+ImageNerveApp/node_modules/
+
+# Expo
+ImageNerveApp/.expo/
+ImageNerveApp/dist/
+ImageNerveApp/web-build/
+ImageNerveApp/expo-env.d.ts
+
+# Native
+ImageNerveApp/.kotlin/
+ImageNerveApp/*.orig.*
+ImageNerveApp/*.jks
+ImageNerveApp/*.p8
+ImageNerveApp/*.p12
+ImageNerveApp/*.key
+ImageNerveApp/*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+backend/.env
+backend/.venv/
+
+#backend
+backend/app/routes/
+backend/app/__pycache__/
+
+# typescript
+*.tsbuildinfo

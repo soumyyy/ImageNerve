@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+supabase
+python-multipart 
+boto3
+pyjwt
+python-dotenv
+pgvector

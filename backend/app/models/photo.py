@@ -1,0 +1,1 @@
+# Photo Pydantic schema placeholder 
