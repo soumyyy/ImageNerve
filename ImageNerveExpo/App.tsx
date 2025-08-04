@@ -12,56 +12,50 @@ import { Photo, Album } from './src/types';
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
-// PhotoImage Component with fallback strategies
+// Simple PhotoImage Component without retry loops
 function PhotoImage({ photo }: { photo: Photo }) {
-  const [imageUri, setImageUri] = useState(photo.s3_url);
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-
-  // Generate alternative URLs to try
-  const getAlternativeUrls = (originalUrl: string) => {
-    const filename = originalUrl.split('/').pop();
-    const bucketName = 'imagenervetesting'; // Your bucket name
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  
+  useEffect(() => {
+    loadImageUrl();
     
-    return [
-      originalUrl, // Original URL
-      `https://${bucketName}.s3.amazonaws.com/${filename}`, // Standard format
-      `https://${bucketName}.s3.ap-south-1.amazonaws.com/${filename}`, // Regional format
-      `https://s3.ap-south-1.amazonaws.com/${bucketName}/${filename}`, // Alternative format
-    ];
-  };
-
-  const tryNextUrl = async () => {
-    const urls = getAlternativeUrls(photo.s3_url);
-    const currentIndex = urls.indexOf(imageUri);
-    const nextIndex = currentIndex + 1;
-    
-    if (nextIndex < urls.length) {
-      console.log(`Trying alternative URL ${nextIndex + 1}:`, urls[nextIndex]);
-      setImageUri(urls[nextIndex]);
-      setHasError(false);
-    } else {
-      // Try getting a presigned download URL as final fallback
-      try {
-        console.log('Trying presigned download URL for:', photo.filename);
-        const downloadResponse = await photosAPI.getDownloadUrl(photo.filename);
-        setImageUri(downloadResponse.url);
-        setHasError(false);
-      } catch (error) {
-        console.log('All URL formats failed for photo:', photo.filename);
+    // Timeout to prevent endless loading
+    const timeout = setTimeout(() => {
+      if (isLoading) {
+        console.log('Image load timeout for:', photo.filename);
+        setIsLoading(false);
         setHasError(true);
       }
+    }, 10000); // 10 second timeout
+    
+    return () => clearTimeout(timeout);
+  }, []);
+
+  const loadImageUrl = async () => {
+    try {
+      // Try to get a presigned download URL for better access
+      const downloadResponse = await photosAPI.getDownloadUrl(photo.filename);
+      setImageUrl(downloadResponse.url);
+      console.log('Using presigned URL for:', photo.filename);
+    } catch (error) {
+      // Fallback to direct S3 URL
+      const bucketName = 'imagenervetesting';
+      const fallbackUrl = `https://${bucketName}.s3.amazonaws.com/${photo.filename}`;
+      setImageUrl(fallbackUrl);
+      console.log('Using direct S3 URL for:', photo.filename);
     }
   };
 
   const handleImageError = (error: any) => {
-    console.log('Image load failed:', imageUri, error.nativeEvent?.error || error);
+    console.log('Image failed to load:', photo.filename, error.nativeEvent?.error || 'Unknown error');
     setIsLoading(false);
-    tryNextUrl();
+    setHasError(true);
   };
 
   const handleImageLoad = () => {
-    console.log('Image loaded successfully:', imageUri);
+    console.log('Image loaded successfully:', photo.filename);
     setIsLoading(false);
     setHasError(false);
   };
@@ -75,25 +69,29 @@ function PhotoImage({ photo }: { photo: Photo }) {
     );
   }
 
+  if (!imageUrl) {
+    return (
+      <View style={[styles.photoImage, styles.photoLoading]}>
+        <ActivityIndicator size="small" color="#e94560" />
+      </View>
+    );
+  }
+
   return (
-    <>
+    <View style={styles.photoImage}>
       {isLoading && (
-        <View style={[styles.photoImage, styles.photoLoading]}>
+        <View style={[styles.photoImage, styles.photoLoading, { position: 'absolute', zIndex: 1 }]}>
           <ActivityIndicator size="small" color="#e94560" />
         </View>
       )}
       <Image 
-        source={{ 
-          uri: imageUri,
-          cache: 'reload' // Force reload to avoid cache issues
-        }}
-        style={[styles.photoImage, isLoading && { position: 'absolute' }]}
+        source={{ uri: imageUrl }}
+        style={styles.photoImage}
         onError={handleImageError}
         onLoad={handleImageLoad}
-        onLoadStart={() => setIsLoading(true)}
         resizeMode="cover"
       />
-    </>
+    </View>
   );
 }
 
@@ -413,6 +411,15 @@ function DashboardScreen() {
             <View style={styles.emptyState}>
               <Text style={styles.emptyText}>No photos yet</Text>
               <Text style={styles.emptySubtext}>Tap the + button to upload your first photo</Text>
+              <TouchableOpacity 
+                style={styles.debugButton}
+                onPress={() => {
+                  console.log('Current photos in state:', photos);
+                  Alert.alert('Debug', `Found ${photos.length} photos in database`);
+                }}
+              >
+                <Text style={styles.debugButtonText}>🐛 Debug Photos</Text>
+              </TouchableOpacity>
             </View>
           )}
         </View>
@@ -902,5 +909,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderRadius: 8,
+  },
+  debugButton: {
+    backgroundColor: '#1a1a2e',
+    padding: 10,
+    borderRadius: 8,
+    marginTop: 20,
+  },
+  debugButtonText: {
+    color: '#e94560',
+    textAlign: 'center',
+    fontSize: 14,
   },
 });
