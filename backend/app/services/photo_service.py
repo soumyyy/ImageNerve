@@ -26,6 +26,10 @@ class PhotoService:
             # If not a valid UUID, create a UUID from the string hash
             user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
         
+        # Ensure test user exists (for development)
+        if user_id == 'test-user-001':
+            self._ensure_test_user_exists(user_uuid)
+        
         photo = Photo(
             id=uuid.uuid4(),
             user_id=user_uuid,
@@ -95,4 +99,19 @@ class PhotoService:
         
         self.db.delete(photo)
         self.db.commit()
-        return True 
+        return True
+    
+    def _ensure_test_user_exists(self, user_uuid: uuid.UUID):
+        """Ensure test user exists in database for development."""
+        existing_user = self.db.query(User).filter(User.id == user_uuid).first()
+        if not existing_user:
+            test_user = User(
+                id=user_uuid,
+                name="Test User",
+                email="test@example.com",
+                role="user",
+                created_at=datetime.utcnow(),
+                settings={}
+            )
+            self.db.add(test_user)
+            self.db.commit() 

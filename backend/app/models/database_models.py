@@ -59,9 +59,13 @@ class Album(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     name = Column(String)
+    description = Column(String)
+    is_public = Column(Boolean, default=False)
     photo_ids = Column(PG_ARRAY(UUID(as_uuid=True)))
     cluster_ids = Column(PG_ARRAY(UUID(as_uuid=True)))
+    cover_photo_id = Column(UUID(as_uuid=True), ForeignKey("photos.id"))
     created_at = Column(TIMESTAMP)
+    updated_at = Column(TIMESTAMP)
 
 class QRLink(Base):
     __tablename__ = "qr_links"
