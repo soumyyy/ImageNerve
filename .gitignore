@@ -37,6 +37,8 @@ backend/.venv/
 #backend
 backend/app/routes/
 backend/app/__pycache__/
+backend/testImages/
+backend/models/
 
 # typescript
 *.tsbuildinfo

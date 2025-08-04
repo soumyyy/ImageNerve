@@ -4,6 +4,7 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY as PG_ARRAY
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.types import Float
 from geoalchemy2 import Geography
+from pgvector.sqlalchemy import Vector
 
 Base = declarative_base()
 
@@ -39,7 +40,7 @@ class FaceEmbedding(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     photo_id = Column(UUID(as_uuid=True), ForeignKey("photos.id"))
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    embedding = Column(PG_ARRAY(Float))  # Use pgvector extension for real vector support
+    embedding = Column(Vector(512))  # Use pgvector Vector type for 512-dimensional embeddings
     bbox = Column(JSONB)  # {x: 123, y: 456, w: 100, h: 100}
     created_at = Column(TIMESTAMP)
     confidence = Column(Float)
