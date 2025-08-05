@@ -26,10 +26,18 @@ def generate_presigned_url(key: str, expiration: int = 3600) -> str:
     logger.info(f"☁️ Generating presigned upload URL | Key: {key} | Expiration: {expiration}s")
     
     try:
+        # Create a dict of parameters that will be used to create the signed URL
+        params = {
+            "Bucket": S3_BUCKET_NAME,
+            "Key": key,
+        }
+        
+        # Generate the URL with specific conditions
         url = s3_client.generate_presigned_url(
-            "put_object",
-            Params={"Bucket": S3_BUCKET_NAME, "Key": key},
+            ClientMethod="put_object",
+            Params=params,
             ExpiresIn=expiration,
+            HttpMethod="PUT"
         )
         duration = time.time() - start_time
         log_s3_operation("presigned_upload", key, True, f"Duration: {duration:.3f}s | Expires: {expiration}s")

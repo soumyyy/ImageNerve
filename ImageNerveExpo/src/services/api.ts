@@ -1,7 +1,11 @@
 import axios from 'axios';
 import { Photo, Album, FaceCluster, User } from '../types';
+import { sanitizeFilename } from '../utils/fileUtils';
 
 const API_BASE_URL = 'http://127.0.0.1:8000';
+
+// URL cache for presigned URLs
+const urlCache = new Map<string, { url: string; expires: number }>();
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -13,9 +17,18 @@ const api = axios.create({
 
 // Photos API
 export const photosAPI = {
-  getUploadUrl: async (filename: string) => {
-    const response = await api.post(`/photos/s3/upload-url?filename=${filename}`);
-    return response.data;
+  getUploadUrl: async (filename: string, userId: string) => {
+    const sanitizedFilename = sanitizeFilename(filename);
+    const params = new URLSearchParams({
+      filename: sanitizedFilename,
+      user_id: userId
+    });
+    console.log('🔄 Getting upload URL | Original:', filename, '| Sanitized:', sanitizedFilename);
+    const response = await api.post(`/photos/s3/upload-url?${params.toString()}`);
+    return {
+      ...response.data,
+      sanitizedFilename  // Return sanitized name for later use
+    };
   },
 
   createPhoto: async (photoData: {
@@ -26,23 +39,36 @@ export const photosAPI = {
     description?: string;
     is_public?: boolean;
   }) => {
-    console.log('📤 Creating photo with data:', photoData);
-    const params = new URLSearchParams({
-      user_id: photoData.user_id,
-      s3_url: photoData.s3_url,
+    console.log('📤 Creating photo record:', {
       filename: photoData.filename,
-      description: photoData.description || '',
-      is_public: photoData.is_public ? 'true' : 'false',
+      user: photoData.user_id,
+      url: photoData.s3_url
     });
-    
-    if (photoData.tags && photoData.tags.length > 0) {
-      params.append('tags', photoData.tags.join(','));
+
+    try {
+      // Send as JSON body instead of URL parameters
+      console.log('🔄 Sending POST request to /photos with data:', photoData);
+      const response = await api.post('/photos', photoData, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      console.log('✅ Photo record created:', {
+        id: response.data.id,
+        filename: response.data.filename,
+        user: response.data.user_id
+      });
+      
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Failed to create photo record:', {
+        error: error.response?.data?.detail || error.message,
+        status: error.response?.status,
+        data: photoData
+      });
+      throw error;
     }
-    
-    console.log('🔗 API URL:', `/photos/?${params.toString()}`);
-    const response = await api.post(`/photos/?${params.toString()}`);
-    console.log('📥 Photo creation response:', response.data);
-    return response.data;
   },
 
   getUserPhotos: async (userId: string) => {
@@ -52,8 +78,25 @@ export const photosAPI = {
     return response.data;
   },
 
-  getDownloadUrl: async (filename: string) => {
-    const response = await api.get(`/photos/s3/download-url?filename=${filename}`);
+  getDownloadUrl: async (filename: string, userId: string) => {
+    const cacheKey = `${filename}_${userId}`;
+    const cached = urlCache.get(cacheKey);
+    
+    // Check cache with 5-minute safety margin
+    if (cached && cached.expires > Date.now() + 300000) {
+      console.log('🎯 Cache hit for:', filename);
+      return { url: cached.url };
+    }
+
+    console.log('🔄 Cache miss for:', filename);
+    const response = await api.get(`/photos/s3/download-url?filename=${filename}&user_id=${userId}`);
+    
+    // Cache the URL with expiration (1 hour - 5 minutes safety margin)
+    urlCache.set(cacheKey, {
+      url: response.data.url,
+      expires: Date.now() + 3300000 // 55 minutes
+    });
+    
     return response.data;
   },
 

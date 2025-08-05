@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { pickImage } from '../utils/imageUtils';
+import { getMimeType } from '../utils/fileUtils';
 import { photosAPI, facesAPI } from '../services/api';
 import { Photo } from '../types';
 import { GlassCard } from '../components/GlassCard';
@@ -31,10 +32,8 @@ export const DashboardScreen: React.FC = () => {
   const userId = 'test-user-001';
 
   useEffect(() => {
+    // Only load data on mount, no test needed in production
     loadUserData();
-    
-    // Test API connectivity
-    testAPIConnection();
   }, []);
 
   const testAPIConnection = async () => {
@@ -79,82 +78,182 @@ export const DashboardScreen: React.FC = () => {
   const handlePhotoUpload = async () => {
     try {
       setUploading(true);
-      console.log('Starting photo upload...');
+      console.log('📸 Starting photo upload process...');
       
       // Pick image using cross-platform picker
       const imageResult = await pickImage();
       if (!imageResult) {
-        console.log('No image selected');
+        console.log('❌ No image selected');
         return;
       }
-      console.log('Image selected:', imageResult.name);
+      console.log('✅ Image selected:', imageResult.name, '| Type:', imageResult.type);
 
       // Get presigned URL for S3 upload
-      console.log('Getting upload URL...');
-      const uploadUrlResponse = await photosAPI.getUploadUrl(imageResult.name);
-      console.log('Upload URL received:', uploadUrlResponse);
+      console.log('🔐 Getting upload URL...');
+      const uploadUrlResponse = await photosAPI.getUploadUrl(imageResult.name, userId);
+      console.log('✅ Upload URL received | Sanitized filename:', uploadUrlResponse.sanitizedFilename);
       
-      // Upload to S3
-      console.log('Preparing upload body...');
+      // Prepare upload body with proper mime type
+      console.log('📦 Preparing upload body...');
       let uploadBody;
+      const mimeType = getMimeType(imageResult.name);
+      
       if (Platform.OS === 'web') {
         uploadBody = await fetch(imageResult.uri).then(r => r.blob());
       } else {
-        // For React Native, we need to use FormData or read the file differently
         const response = await fetch(imageResult.uri);
         uploadBody = await response.blob();
       }
 
-      console.log('Uploading to S3...');
-      const uploadResponse = await fetch(uploadUrlResponse.upload_url, {
-        method: 'PUT',
-        body: uploadBody,
-        headers: {
-          'Content-Type': imageResult.type,
-        },
+      // Upload to S3 with retries
+      console.log('☁️ Starting S3 upload:', {
+        filename: uploadUrlResponse.sanitizedFilename,
+        size: uploadBody.size,
+        type: mimeType
       });
 
-      if (!uploadResponse.ok) {
-        console.error('S3 upload failed:', uploadResponse.status, uploadResponse.statusText);
-        throw new Error(`Failed to upload to S3: ${uploadResponse.status}`);
+      let uploadSuccess = false;
+      const maxRetries = 3;
+      const startTime = Date.now();
+      let lastError = null;
+      
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        const attemptStart = Date.now();
+        try {
+          // First verify the upload URL is valid
+          if (!uploadUrlResponse.upload_url) {
+            throw new Error('No upload URL provided');
+          }
+
+          // Attempt the upload with timeout
+          // Parse the presigned URL to get the base URL and query parameters
+          const presignedUrl = new URL(uploadUrlResponse.upload_url);
+          const baseUrl = `${presignedUrl.origin}${presignedUrl.pathname}`;
+          const queryParams = Object.fromEntries(presignedUrl.searchParams);
+
+          console.log('🔄 Uploading to:', {
+            baseUrl,
+            queryParams,
+            contentType: mimeType,
+            size: uploadBody.size
+          });
+
+          const response = await Promise.race([
+            fetch(uploadUrlResponse.upload_url, {
+              method: 'PUT',
+              body: uploadBody,
+              headers: {
+                'Content-Type': mimeType,
+              },
+              mode: 'cors',
+            }),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Upload timeout')), 30000)
+            )
+          ]) as Response;
+
+          const attemptDuration = (Date.now() - attemptStart) / 1000;
+          
+          // Check response status
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => 'No error details');
+            throw new Error(`Upload failed with status ${response.status}: ${errorText}`);
+          }
+
+          // Upload successful
+          console.log('✅ S3 upload successful:', {
+            attempt,
+            duration: attemptDuration.toFixed(2) + 's',
+            status: response.status,
+            size: uploadBody.size,
+          });
+          
+          uploadSuccess = true;
+          break;
+          
+        } catch (error: any) {
+          lastError = error;
+          const attemptDuration = (Date.now() - attemptStart) / 1000;
+          
+          console.warn(`⚠️ Upload attempt ${attempt} failed:`, {
+            error: error.message,
+            duration: attemptDuration.toFixed(2) + 's'
+          });
+
+          if (attempt === maxRetries) {
+            console.error('❌ All upload attempts failed:', {
+              attempts: maxRetries,
+              finalError: error.message
+            });
+            throw new Error(`Failed to upload after ${maxRetries} attempts: ${error.message}`);
+          }
+
+          // Wait before retry with exponential backoff
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+          console.log(`⏳ Waiting ${delay}ms before retry...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
       }
-      console.log('S3 upload successful');
+
+      if (!uploadSuccess) {
+        throw new Error('Upload failed: ' + (lastError?.message || 'Unknown error'));
+      }
+
+      console.log('✅ S3 upload successful');
 
       // Create photo record in database
-      console.log('Creating photo record in database...');
+      console.log('🗄️ Creating photo record...', {
+        filename: uploadUrlResponse.sanitizedFilename,
+        url: uploadUrlResponse.file_url
+      });
+
       const photoData = {
         user_id: userId,
         s3_url: uploadUrlResponse.file_url,
-        filename: imageResult.name,
+        filename: uploadUrlResponse.sanitizedFilename,
         description: 'Uploaded from mobile app',
         is_public: false,
       };
 
-      const createdPhoto = await photosAPI.createPhoto(photoData);
-      console.log('✅ Photo record created:', createdPhoto);
-      console.log('🆔 Created photo ID:', createdPhoto.id);
+      let photo;
+      try {
+        photo = await photosAPI.createPhoto(photoData);
+        console.log('✅ Photo record created:', {
+          id: photo.id,
+          filename: photo.filename,
+          url: photo.s3_url
+        });
+      } catch (error: any) {
+        console.error('❌ Failed to create photo record:', {
+          error: error.response?.data?.detail || error.message,
+          status: error.response?.status,
+          data: photoData
+        });
+        throw new Error(`Failed to create photo record: ${error.response?.data?.detail || error.message}`);
+      }
       
-      // Try to detect faces (optional - skip if not working)
+      // Try to detect faces with retries
       let faceCount = 0;
       try {
         console.log('🤖 Starting face detection...');
         const formData = new FormData();
+        
         if (Platform.OS === 'web') {
           const blob = await fetch(imageResult.uri).then(r => r.blob());
-          formData.append('file', blob, imageResult.name);
+          formData.append('file', blob, uploadUrlResponse.sanitizedFilename);
         } else {
           formData.append('file', {
             uri: imageResult.uri,
-            type: imageResult.type,
-            name: imageResult.name,
+            type: mimeType,
+            name: uploadUrlResponse.sanitizedFilename,
           } as any);
         }
         
-        const faceResult = await facesAPI.detectAndStore(formData, createdPhoto.id, userId);
+        const faceResult = await facesAPI.detectAndStore(formData, photo.id, userId);
         faceCount = faceResult.faces?.length || 0;
-        console.log('✅ Face detection successful:', faceCount, 'faces found');
+        console.log('✅ Face detection completed | Faces found:', faceCount);
       } catch (faceError: any) {
-        console.log('⚠️ Face detection skipped (photo upload successful):', faceError.message || faceError);
+        console.warn('⚠️ Face detection skipped:', faceError.message || faceError);
       }
       
       Alert.alert(
@@ -162,8 +261,10 @@ export const DashboardScreen: React.FC = () => {
         `Photo uploaded successfully!${faceCount > 0 ? ` Found ${faceCount} faces.` : ''}`
       );
 
-      // Reload photos
-      console.log('🔄 Reloading user photos...');
+      // Wait briefly for S3 propagation then reload
+      console.log('⏳ Waiting for S3 propagation...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.log('🔄 Reloading photos...');
       await loadUserData();
       
     } catch (error: any) {
@@ -210,7 +311,7 @@ export const DashboardScreen: React.FC = () => {
             <View style={styles.photoGrid}>
               {photos.map((photo) => (
                 <TouchableOpacity key={photo.id} style={styles.photoItem} activeOpacity={0.8}>
-                  <PhotoImage photo={photo} />
+                  <PhotoImage photo={photo} userId={userId} />
                 </TouchableOpacity>
               ))}
             </View>
@@ -252,7 +353,7 @@ export const DashboardScreen: React.FC = () => {
                   try {
                     console.log('🧪 Testing S3 upload URL...');
                     const testFilename = `test-${Date.now()}.jpg`;
-                    const uploadUrlResponse = await photosAPI.getUploadUrl(testFilename);
+                    const uploadUrlResponse = await photosAPI.getUploadUrl(testFilename, userId);
                     console.log('✅ S3 upload URL test successful:', uploadUrlResponse);
                     Alert.alert('S3 Test', 'S3 upload URL generation working!');
                   } catch (error) {

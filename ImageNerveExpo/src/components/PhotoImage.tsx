@@ -5,9 +5,10 @@ import { photosAPI } from '../services/api';
 
 interface PhotoImageProps {
   photo: Photo;
+  userId: string;  // Add userId prop
 }
 
-export const PhotoImage: React.FC<PhotoImageProps> = ({ photo }) => {
+export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId }) => {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -26,7 +27,7 @@ export const PhotoImage: React.FC<PhotoImageProps> = ({ photo }) => {
       
       // Always use presigned URL for better access control
       console.log('🔐 Getting presigned URL for:', photo.filename);
-      const downloadResponse = await photosAPI.getDownloadUrl(photo.filename);
+      const downloadResponse = await photosAPI.getDownloadUrl(photo.filename, userId);
       console.log('✅ Presigned URL received:', downloadResponse.url);
       setImageUrl(downloadResponse.url);
     } catch (error) {

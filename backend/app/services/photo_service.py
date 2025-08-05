@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from app.models.database_models import Photo, User
 from app.utils.logger import get_logger, log_db_operation
 from typing import List, Optional
+from sqlalchemy import text
 
 class PhotoService:
     def __init__(self, db: Session):
@@ -87,10 +88,20 @@ class PhotoService:
                 self.logger.debug(f"🔄 Generated UUID from string: {user_id} -> {user_uuid}")
             
             # Order by newest first so recently uploaded photos appear immediately
+            # Use a more efficient query with selected columns
             photos = (
                 self.db.query(Photo)
                 .filter(Photo.user_id == user_uuid)
                 .order_by(Photo.uploaded_at.desc())
+                .options(
+                    # Load only needed columns for initial display
+                    load_only(
+                        Photo.id,
+                        Photo.filename,
+                        Photo.s3_url,
+                        Photo.uploaded_at
+                    )
+                )
                 .limit(limit)
                 .all()
             )
