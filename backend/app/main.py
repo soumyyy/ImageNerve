@@ -1,8 +1,39 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.api_router import apiRouter
+from app.utils.logger import setup_logging, get_logger, log_api_request
+import time
+import os
 
-app = FastAPI()
+# Initialize logging
+log_level = os.getenv("LOG_LEVEL", "INFO")
+setup_logging(log_level=log_level, log_file=True)
+
+logger = get_logger("imagenerve.main")
+logger.info("🚀 Starting ImageNerve Backend Application")
+
+app = FastAPI(title="ImageNerve API", version="1.0.0")
+
+# Middleware to log all API requests
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    
+    # Extract user_id from query params if available
+    user_id = request.query_params.get("user_id", "unknown")
+    
+    response = await call_next(request)
+    
+    duration = time.time() - start_time
+    log_api_request(
+        method=request.method,
+        endpoint=str(request.url.path),
+        user_id=user_id,
+        status_code=response.status_code,
+        duration=duration
+    )
+    
+    return response
 
 app.add_middleware(
     CORSMiddleware,

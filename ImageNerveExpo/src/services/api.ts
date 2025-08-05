@@ -26,6 +26,7 @@ export const photosAPI = {
     description?: string;
     is_public?: boolean;
   }) => {
+    console.log('📤 Creating photo with data:', photoData);
     const params = new URLSearchParams({
       user_id: photoData.user_id,
       s3_url: photoData.s3_url,
@@ -38,12 +39,16 @@ export const photosAPI = {
       params.append('tags', photoData.tags.join(','));
     }
     
+    console.log('🔗 API URL:', `/photos/?${params.toString()}`);
     const response = await api.post(`/photos/?${params.toString()}`);
+    console.log('📥 Photo creation response:', response.data);
     return response.data;
   },
 
   getUserPhotos: async (userId: string) => {
+    console.log('📤 Getting photos for user:', userId);
     const response = await api.get(`/photos/?user_id=${userId}`);
+    console.log('📥 User photos response:', response.data);
     return response.data;
   },
 
