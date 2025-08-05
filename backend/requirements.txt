@@ -8,3 +8,5 @@ python-dotenv
 pgvector
 geoalchemy2
 sqlalchemy
+Pillow
+requests

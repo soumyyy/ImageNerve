@@ -5,8 +5,8 @@ import { pickImage } from '../utils/imageUtils';
 import { getMimeType } from '../utils/fileUtils';
 import { photosAPI, facesAPI } from '../services/api';
 import { Photo } from '../types';
-import { GlassCard } from '../components/GlassCard';
 import { PhotoImage } from '../components/PhotoImage';
+import { PhotoViewer } from '../components/PhotoViewer';
 
 // Get screen dimensions for responsive design
 const { width: screenWidth } = Dimensions.get('window');
@@ -15,18 +15,23 @@ const isLargeScreen = screenWidth > 768;
 
 const getPhotoItemWidth = () => {
   if (isWeb && isLargeScreen) {
-    return (screenWidth - 100) / 6; // 6 columns on large screens
+    return screenWidth / 6; // 6 columns on large screens, no gaps
   } else if (isWeb) {
-    return (screenWidth - 80) / 4; // 4 columns on medium screens
+    return screenWidth / 4; // 4 columns on medium screens, no gaps
   } else {
-    return (screenWidth - 60) / 3; // 3 columns on mobile
+    return screenWidth / 3; // 3 columns on mobile, no gaps
   }
 };
 
-export const DashboardScreen: React.FC = () => {
+interface DashboardScreenProps {
+  onSettingsPress?: () => void;
+}
+
+export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPress }) => {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   
   // Test user ID for development
   const userId = 'test-user-001';
@@ -92,6 +97,28 @@ export const DashboardScreen: React.FC = () => {
       console.log('🔐 Getting upload URL...');
       const uploadUrlResponse = await photosAPI.getUploadUrl(imageResult.name, userId);
       console.log('✅ Upload URL received | Sanitized filename:', uploadUrlResponse.sanitizedFilename);
+      
+      // Create a temporary photo object for immediate display
+      const tempPhoto: Photo = {
+        id: `temp-${Date.now()}`,
+        user_id: userId,
+        s3_url: imageResult.uri, // Use local URI for immediate display
+        filename: uploadUrlResponse.sanitizedFilename,
+        tags: [],
+        uploaded_at: new Date().toISOString(),
+        description: 'Uploading...',
+        is_public: false,
+        photo_metadata: {
+          file_size: imageResult.size,
+          format: imageResult.type,
+          dimensions: 'Unknown',
+          uploaded_from: 'mobile_app',
+          upload_timestamp: new Date().toISOString(),
+        }
+      };
+
+      // Add temp photo to the beginning of the list for immediate display
+      setPhotos(prevPhotos => [tempPhoto, ...prevPhotos]);
       
       // Prepare upload body with proper mime type
       console.log('📦 Preparing upload body...');
@@ -199,13 +226,22 @@ export const DashboardScreen: React.FC = () => {
         throw new Error('Upload failed: ' + (lastError?.message || 'Unknown error'));
       }
 
-      console.log('✅ S3 upload successful');
+                console.log('✅ S3 upload successful');
 
-      // Create photo record in database
-      console.log('🗄️ Creating photo record...', {
-        filename: uploadUrlResponse.sanitizedFilename,
-        url: uploadUrlResponse.file_url
-      });
+          // Create photo record in database
+          console.log('🗄️ Creating photo record...', {
+            filename: uploadUrlResponse.sanitizedFilename,
+            url: uploadUrlResponse.file_url
+          });
+          
+      // Extract basic metadata from the image
+      const imageMetadata = {
+        file_size: uploadBody.size,
+        format: mimeType,
+        dimensions: 'Unknown', // Will be extracted on backend if possible
+        uploaded_from: 'mobile_app',
+        upload_timestamp: new Date().toISOString(),
+      };
 
       const photoData = {
         user_id: userId,
@@ -213,15 +249,22 @@ export const DashboardScreen: React.FC = () => {
         filename: uploadUrlResponse.sanitizedFilename,
         description: 'Uploaded from mobile app',
         is_public: false,
+        photo_metadata: imageMetadata,
       };
 
-      let photo;
+      let photo: Photo;
       try {
         photo = await photosAPI.createPhoto(photoData);
         console.log('✅ Photo record created:', {
           id: photo.id,
           filename: photo.filename,
           url: photo.s3_url
+        });
+        
+        // Remove temp photo and add real photo
+        setPhotos(prevPhotos => {
+          const filteredPhotos = prevPhotos.filter(p => p.id !== tempPhoto.id);
+          return [photo, ...filteredPhotos];
         });
       } catch (error: any) {
         console.error('❌ Failed to create photo record:', {
@@ -276,24 +319,36 @@ export const DashboardScreen: React.FC = () => {
     }
   };
 
+  const handlePhotoPress = (index: number) => {
+    setSelectedPhotoIndex(index);
+  };
+
+  const handleCloseViewer = () => {
+    setSelectedPhotoIndex(null);
+  };
+
+  if (selectedPhotoIndex !== null) {
+    return (
+      <PhotoViewer
+        photos={photos}
+        initialIndex={selectedPhotoIndex}
+        userId={userId}
+        onClose={handleCloseViewer}
+      />
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Photos</Text>
-        <View style={styles.headerButtons}>
-          <TouchableOpacity 
-            style={[styles.headerButton, uploading && styles.buttonDisabled]} 
-            onPress={handlePhotoUpload}
-            disabled={uploading}
-            activeOpacity={0.6}
-          >
-            {uploading ? (
-              <ActivityIndicator size="small" color="#ffffff" />
-            ) : (
-              <Text style={styles.headerButtonText}>+</Text>
-            )}
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity 
+          style={styles.profileButton}
+          onPress={onSettingsPress}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.profileButtonText}>⚙</Text>
+        </TouchableOpacity>
       </View>
       
       <ScrollView 
@@ -308,11 +363,12 @@ export const DashboardScreen: React.FC = () => {
           </View>
         ) : photos.length > 0 ? (
           <View style={styles.photoGrid}>
-            {photos.map((photo) => (
+            {photos.map((photo, index) => (
               <TouchableOpacity 
                 key={photo.id} 
                 style={styles.photoItem} 
                 activeOpacity={0.7}
+                onPress={() => handlePhotoPress(index)}
               >
                 <PhotoImage photo={photo} userId={userId} />
               </TouchableOpacity>
@@ -322,11 +378,25 @@ export const DashboardScreen: React.FC = () => {
           <View style={styles.emptyState}>
             <Text style={styles.emptyText}>No Photos Yet</Text>
             <Text style={styles.emptySubtext}>
-              Tap the + button above to add your first photo
+              Tap the + button below to add your first photo
             </Text>
           </View>
         )}
       </ScrollView>
+
+      {/* Floating Add Button */}
+      <TouchableOpacity 
+        style={[styles.floatingAddButton, uploading && styles.buttonDisabled]} 
+        onPress={handlePhotoUpload}
+        disabled={uploading}
+        activeOpacity={0.8}
+      >
+        {uploading ? (
+          <ActivityIndicator size="small" color="#ffffff" />
+        ) : (
+          <Text style={styles.floatingAddButtonText}>+</Text>
+        )}
+      </TouchableOpacity>
     </SafeAreaView>
   );
 };
@@ -351,41 +421,37 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     letterSpacing: 0.3,
   },
-  headerButtons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  headerButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+  profileButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: 'rgba(255, 255, 255, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: 8,
   },
-  headerButtonText: {
-    fontSize: 24,
-    color: '#ffffff',
-    lineHeight: 28,
-    marginTop: -2, // Visual alignment for the + symbol
+  profileButtonText: {
+    fontSize: 20,
   },
   content: {
     flex: 1,
     backgroundColor: '#000000',
   },
   scrollContent: {
-    paddingBottom: 20,
+    paddingBottom: 100, // Space for floating button and future albums
+    paddingHorizontal: 0, // No horizontal padding to ensure images touch edges
   },
   photoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    padding: 1, // Creates a thin border effect between photos
+    padding: 0,
+    margin: 0,
+    width: screenWidth,
   },
   photoItem: {
     width: getPhotoItemWidth(),
     height: getPhotoItemWidth(),
-    padding: 0.5, // Half of the grid padding for even spacing
+    margin: 0,
+    padding: 0,
   },
   loadingContainer: {
     flex: 1,
@@ -418,6 +484,31 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.6)',
     textAlign: 'center',
     lineHeight: 22,
+  },
+  floatingAddButton: {
+    position: 'absolute',
+    bottom: 30,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  floatingAddButtonText: {
+    fontSize: 32,
+    color: '#ffffff',
+    fontWeight: '300',
+    lineHeight: 32,
   },
   buttonDisabled: {
     opacity: 0.5,

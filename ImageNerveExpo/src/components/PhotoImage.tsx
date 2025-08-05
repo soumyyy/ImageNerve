@@ -6,9 +6,10 @@ import { photosAPI } from '../services/api';
 interface PhotoImageProps {
   photo: Photo;
   userId: string;  // Add userId prop
+  style?: any;  // Add optional style prop
 }
 
-export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId }) => {
+export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId, style }) => {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -17,8 +18,15 @@ export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId }) => {
   useEffect(() => {
     console.log('🖼️ PhotoImage component mounted for:', photo.filename);
     console.log('📋 Photo data:', photo);
+    
+    // Reset states when photo changes
+    setHasError(false);
+    setIsLoading(true);
+    setImageUrl(null);
+    fadeAnim.setValue(0);
+    
     loadImageUrl();
-  }, []);
+  }, [photo.id]); // Re-run when photo.id changes
 
   const loadImageUrl = async () => {
     try {
@@ -87,10 +95,10 @@ export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId }) => {
       <Animated.View style={[styles.imageContainer, { opacity: fadeAnim }]}>
         <Image 
           source={{ uri: imageUrl }}
-          style={styles.photoImage}
+          style={[styles.photoImage, style]}
           onError={handleImageError}
           onLoad={handleImageLoad}
-          resizeMode="cover"
+          resizeMode={style ? "contain" : "cover"}
         />
       </Animated.View>
     </View>
@@ -101,34 +109,44 @@ const styles = StyleSheet.create({
   photoImageContainer: {
     width: '100%',
     height: '100%',
-    borderRadius: 12,
+    borderRadius: 0,
     overflow: 'hidden',
     backgroundColor: 'transparent',
+    margin: 0,
+    padding: 0,
   },
   imageContainer: {
     width: '100%',
     height: '100%',
+    margin: 0,
+    padding: 0,
   },
   photoImage: {
     width: '100%',
     height: '100%',
-    borderRadius: 12,
+    borderRadius: 0,
+    margin: 0,
+    padding: 0,
   },
   photoLoading: {
     backgroundColor: 'rgba(26, 26, 46, 0.8)',
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: 0,
     width: '100%',
     height: '100%',
+    margin: 0,
+    padding: 0,
   },
   photoError: {
     backgroundColor: 'rgba(26, 26, 46, 0.8)',
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: 0,
     width: '100%',
     height: '100%',
+    margin: 0,
+    padding: 0,
   },
   photoErrorText: {
     fontSize: 24,
