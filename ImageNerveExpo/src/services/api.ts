@@ -1,8 +1,12 @@
 import axios from 'axios';
+import { Platform } from 'react-native';
 import { Photo, Album, FaceCluster, User } from '../types';
 import { sanitizeFilename } from '../utils/fileUtils';
+import { getApiUrl } from '../config/api';
 
-const API_BASE_URL = 'http://127.0.0.1:8000';
+const API_BASE_URL = getApiUrl();
+
+console.log('🌐 Using API URL:', API_BASE_URL, '| Platform:', Platform.OS);
 
 // URL cache for presigned URLs
 const urlCache = new Map<string, { url: string; expires: number }>();
@@ -14,6 +18,28 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// Test the API connection
+(async () => {
+  try {
+    console.log('🧪 Testing API connection...');
+    console.log('🔗 Testing URL:', API_BASE_URL);
+    
+    const response = await api.get('/');
+    console.log('✅ API connection successful:', {
+      status: response.status,
+      url: API_BASE_URL,
+      data: response.data
+    });
+  } catch (error: any) {
+    console.error('❌ API connection failed:', {
+      url: API_BASE_URL,
+      error: error.message,
+      code: error.code,
+      response: error.response?.data
+    });
+  }
+})();
 
 // Photos API
 export const photosAPI = {
@@ -47,11 +73,15 @@ export const photosAPI = {
 
     try {
       // Send as JSON body instead of URL parameters
-      console.log('🔄 Sending POST request to /photos with data:', photoData);
-      const response = await api.post('/photos', photoData, {
+      const requestUrl = `${API_BASE_URL}/photos/`;
+      console.log('🔄 Sending POST request to:', requestUrl);
+      console.log('📦 Request data:', JSON.stringify(photoData, null, 2));
+      
+      const response = await api.post('/photos/', photoData, {
         headers: {
           'Content-Type': 'application/json'
-        }
+        },
+        timeout: 30000 // Increase timeout to 60 seconds for photo creation
       });
       
       console.log('✅ Photo record created:', {
@@ -63,19 +93,35 @@ export const photosAPI = {
       return response.data;
     } catch (error: any) {
       console.error('❌ Failed to create photo record:', {
+        url: `${API_BASE_URL}/photos/`,
         error: error.response?.data?.detail || error.message,
         status: error.response?.status,
-        data: photoData
+        code: error.code,
+        data: photoData,
+        response: error.response?.data
       });
       throw error;
     }
   },
 
   getUserPhotos: async (userId: string) => {
-    console.log('📤 Getting photos for user:', userId);
-    const response = await api.get(`/photos/?user_id=${userId}`);
-    console.log('📥 User photos response:', response.data);
-    return response.data;
+    try {
+      console.log('📤 Getting photos for user:', userId);
+      console.log('🔍 Making request to:', `${API_BASE_URL}/photos/?user_id=${userId}`);
+      
+      const response = await api.get(`/photos/?user_id=${userId}`);
+      console.log('📥 User photos response:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Failed to get user photos:', {
+        url: `${API_BASE_URL}/photos/?user_id=${userId}`,
+        error: error.message,
+        code: error.code,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      throw error;
+    }
   },
 
   getDownloadUrl: async (filename: string, userId: string) => {

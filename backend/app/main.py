@@ -14,6 +14,11 @@ logger.info("🚀 Starting ImageNerve Backend Application")
 
 app = FastAPI(title="ImageNerve API", version="1.0.0")
 
+@app.get("/")
+async def root():
+    """Health check endpoint"""
+    return {"message": "ImageNerve API is running", "status": "healthy"}
+
 # Middleware to log all API requests
 @app.middleware("http")
 async def log_requests(request: Request, call_next):

@@ -54,9 +54,22 @@ class PhotoService:
                 photo_metadata=photo_metadata or {}
             )
             
+            # Add performance logging
+            start_time = datetime.utcnow()
+            self.logger.debug(f"📝 Adding photo to database session...")
             self.db.add(photo)
+            
+            self.logger.debug(f"💾 Committing transaction...")
             self.db.commit()
+            commit_time = datetime.utcnow()
+            commit_duration = (commit_time - start_time).total_seconds()
+            self.logger.debug(f"✅ Transaction committed in {commit_duration:.2f}s")
+            
+            self.logger.debug(f"🔄 Refreshing photo object...")
             self.db.refresh(photo)
+            refresh_time = datetime.utcnow()
+            refresh_duration = (refresh_time - commit_time).total_seconds()
+            self.logger.debug(f"✅ Photo refreshed in {refresh_duration:.2f}s")
             
             log_db_operation("insert", "photos", str(photo_id), True, f"User: {user_id} | File: {filename}")
             self.logger.info(f"✅ Photo record created successfully | Photo ID: {photo_id} | User: {user_id}")

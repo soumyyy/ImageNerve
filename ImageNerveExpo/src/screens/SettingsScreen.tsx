@@ -1,80 +1,64 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import React from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { facesAPI } from '../services/api';
-import { GlassCard } from '../components/GlassCard';
 
 export const SettingsScreen: React.FC = () => {
-  const [clustering, setClustering] = useState(false);
-  const [clusters, setClusters] = useState([]);
-  const userId = 'test-user-001'; // Test user ID
-
-  const handleClusterFaces = async () => {
-    setClustering(true);
-    try {
-      const result = await facesAPI.clusterFaces(userId);
-      Alert.alert('Success!', `Created ${result.clusters?.length || 0} face clusters`);
-      
-      // Load clusters
-      const userClusters = await facesAPI.getClusters(userId);
-      setClusters(userClusters);
-    } catch (error) {
-      console.error('Clustering error:', error);
-      Alert.alert('Error', 'Failed to cluster faces. Please try again.');
-    } finally {
-      setClustering(false);
-    }
-  };
-
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.settingsTitle}>Settings</Text>
-        
-        <GlassCard style={styles.settingsSection}>
-          <Text style={styles.sectionTitle}>User Profile</Text>
-          <View style={styles.profileItem}>
-            <Text style={styles.label}>Name</Text>
-            <Text style={styles.value}>Soumya</Text>
-          </View>
-          <View style={styles.profileItem}>
-            <Text style={styles.label}>Mail</Text>
-            <Text style={styles.value}>soumya@example.com</Text>
-          </View>
-          <View style={styles.profileItem}>
-            <Text style={styles.label}>Number</Text>
-            <Text style={styles.value}>+91 98765 43210</Text>
-          </View>
-        </GlassCard>
-
-        <GlassCard style={styles.settingsSection}>
-          <Text style={styles.sectionTitle}>Face Recognition</Text>
-          <TouchableOpacity 
-            style={[styles.glassButton, clustering && styles.buttonDisabled]} 
-            onPress={handleClusterFaces}
-            disabled={clustering}
-            activeOpacity={0.8}
-          >
-            {clustering ? (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator size="small" color="#ffffff" />
-                <Text style={styles.glassButtonText}>Clustering Faces...</Text>
-              </View>
-            ) : (
-              <Text style={styles.glassButtonText}>🤖 Cluster My Faces</Text>
-            )}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Settings</Text>
+      </View>
+      
+      <ScrollView style={styles.content}>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Account</Text>
+          <TouchableOpacity style={styles.settingItem}>
+            <Text style={styles.settingText}>Profile</Text>
+            <Text style={styles.settingValue}>test-user-001</Text>
           </TouchableOpacity>
-          
-          {clusters.length > 0 && (
-            <GlassCard style={styles.clusterInfo}>
-              <Text style={styles.label}>Face Clusters: {clusters.length}</Text>
-            </GlassCard>
-          )}
-        </GlassCard>
-        
-        <TouchableOpacity style={styles.glassLogoutButton} activeOpacity={0.8}>
-          <Text style={styles.logoutText}>Logout</Text>
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.settingItem}>
+            <Text style={styles.settingText}>Email</Text>
+            <Text style={styles.settingValue}>Not set</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>App Settings</Text>
+          <TouchableOpacity style={styles.settingItem}>
+            <Text style={styles.settingText}>Face Detection</Text>
+            <Text style={styles.settingValue}>Enabled</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.settingItem}>
+            <Text style={styles.settingText}>Photo Quality</Text>
+            <Text style={styles.settingValue}>High</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Storage</Text>
+          <TouchableOpacity style={styles.settingItem}>
+            <Text style={styles.settingText}>Photos</Text>
+            <Text style={styles.settingValue}>3 photos</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.settingItem}>
+            <Text style={styles.settingText}>Cache</Text>
+            <Text style={styles.settingValue}>Clear</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>About</Text>
+          <TouchableOpacity style={styles.settingItem}>
+            <Text style={styles.settingText}>Version</Text>
+            <Text style={styles.settingValue}>1.0.0</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.settingItem}>
+            <Text style={styles.settingText}>Terms of Service</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.settingItem}>
+            <Text style={styles.settingText}>Privacy Policy</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -83,92 +67,52 @@ export const SettingsScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f3460',
+    backgroundColor: '#000000',
   },
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    maxWidth: 1200,
-    alignSelf: 'center',
-    width: '100%',
-  },
-  settingsTitle: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#ffffff',
-    marginBottom: 30,
-  },
-  settingsSection: {
-    marginBottom: 24,
-    padding: 20,
-  },
-  sectionTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#ffffff',
-    marginBottom: 16,
-  },
-  profileItem: {
+  header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 16,
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255, 255, 255, 0.1)',
   },
-  label: {
-    fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.8)',
-  },
-  value: {
-    fontSize: 16,
+  headerTitle: {
+    fontSize: 34,
+    fontWeight: '700',
     color: '#ffffff',
-    fontWeight: '500',
+    letterSpacing: 0.3,
   },
-  glassButton: {
-    backgroundColor: '#e94560',
-    borderRadius: 16,
-    paddingVertical: 16,
-    paddingHorizontal: 40,
-    width: '100%',
-    alignItems: 'center',
-    shadowColor: '#e94560',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+  content: {
+    flex: 1,
+    backgroundColor: '#000000',
   },
-  buttonDisabled: {
-    opacity: 0.6,
+  section: {
+    paddingTop: 24,
+    paddingHorizontal: 16,
   },
-  glassButtonText: {
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '600',
     color: '#ffffff',
-    fontSize: 16,
-    fontWeight: 'bold',
+    marginBottom: 16,
+    letterSpacing: 0.3,
   },
-  loadingContainer: {
+  settingItem: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 10,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
   },
-  clusterInfo: {
-    marginTop: 16,
-    padding: 16,
-  },
-  glassLogoutButton: {
-    backgroundColor: '#e94560',
-    borderRadius: 16,
-    paddingVertical: 16,
-    alignItems: 'center',
-    marginTop: 30,
-    shadowColor: '#e94560',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  logoutText: {
+  settingText: {
+    fontSize: 17,
     color: '#ffffff',
-    fontSize: 16,
-    fontWeight: 'bold',
   },
-}); 
+  settingValue: {
+    fontSize: 17,
+    color: 'rgba(255, 255, 255, 0.6)',
+  },
+});

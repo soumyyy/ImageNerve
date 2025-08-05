@@ -278,14 +278,14 @@ export const DashboardScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <GlassCard style={styles.header}>
-        <Text style={styles.headerTitle}>Image Nerve</Text>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Photos</Text>
         <View style={styles.headerButtons}>
           <TouchableOpacity 
-            style={[styles.glassHeaderButton, uploading && styles.buttonDisabled]} 
+            style={[styles.headerButton, uploading && styles.buttonDisabled]} 
             onPress={handlePhotoUpload}
             disabled={uploading}
-            activeOpacity={0.8}
+            activeOpacity={0.6}
           >
             {uploading ? (
               <ActivityIndicator size="small" color="#ffffff" />
@@ -293,105 +293,39 @@ export const DashboardScreen: React.FC = () => {
               <Text style={styles.headerButtonText}>+</Text>
             )}
           </TouchableOpacity>
-          <TouchableOpacity style={styles.glassHeaderButton} activeOpacity={0.8}>
-            <Text style={styles.headerButtonText}>👤</Text>
-          </TouchableOpacity>
         </View>
-      </GlassCard>
+      </View>
       
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>All Photos ({photos.length})</Text>
-          {loading ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#e94560" />
-              <Text style={styles.loadingText}>Loading your photos...</Text>
-            </View>
-          ) : photos.length > 0 ? (
-            <View style={styles.photoGrid}>
-              {photos.map((photo) => (
-                <TouchableOpacity key={photo.id} style={styles.photoItem} activeOpacity={0.8}>
-                  <PhotoImage photo={photo} userId={userId} />
-                </TouchableOpacity>
-              ))}
-            </View>
-          ) : (
-            <GlassCard style={styles.emptyState}>
-              <Text style={styles.emptyText}>No photos yet</Text>
-              <Text style={styles.emptySubtext}>Tap the + button to upload your first photo</Text>
+      <ScrollView 
+        style={styles.content} 
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#ffffff" />
+            <Text style={styles.loadingText}>Loading your photos...</Text>
+          </View>
+        ) : photos.length > 0 ? (
+          <View style={styles.photoGrid}>
+            {photos.map((photo) => (
               <TouchableOpacity 
-                style={styles.debugButton}
-                onPress={() => {
-                  console.log('Current photos in state:', photos);
-                  Alert.alert('Debug', `Found ${photos.length} photos in database`);
-                }}
+                key={photo.id} 
+                style={styles.photoItem} 
+                activeOpacity={0.7}
               >
-                <Text style={styles.debugButtonText}>🐛 Debug Photos</Text>
+                <PhotoImage photo={photo} userId={userId} />
               </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.debugButton, { marginTop: 10 }]}
-                onPress={async () => {
-                  try {
-                    console.log('🧪 Testing API connection...');
-                    const response = await fetch('http://127.0.0.1:8000/photos/?user_id=test-user-001');
-                    const data = await response.json();
-                    console.log('✅ API test successful:', data);
-                    Alert.alert('API Test', `Backend is working! Found ${data.length} photos`);
-                  } catch (error) {
-                    console.error('❌ API test failed:', error);
-                    Alert.alert('API Test', 'Backend connection failed!');
-                  }
-                }}
-              >
-                <Text style={styles.debugButtonText}>🧪 Test API</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.debugButton, { marginTop: 10 }]}
-                onPress={async () => {
-                  try {
-                    console.log('🧪 Testing S3 upload URL...');
-                    const testFilename = `test-${Date.now()}.jpg`;
-                    const uploadUrlResponse = await photosAPI.getUploadUrl(testFilename, userId);
-                    console.log('✅ S3 upload URL test successful:', uploadUrlResponse);
-                    Alert.alert('S3 Test', 'S3 upload URL generation working!');
-                  } catch (error) {
-                    console.error('❌ S3 upload URL test failed:', error);
-                    Alert.alert('S3 Test', 'S3 upload URL generation failed!');
-                  }
-                }}
-              >
-                <Text style={styles.debugButtonText}>☁️ Test S3</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.debugButton, { marginTop: 10 }]}
-                onPress={async () => {
-                  try {
-                    console.log('🧪 Testing image URLs...');
-                    if (photos.length > 0) {
-                      const firstPhoto = photos[0];
-                      console.log('🔗 Testing URL for first photo:', firstPhoto.s3_url);
-                      
-                      // Test if the URL is accessible
-                      const response = await fetch(firstPhoto.s3_url, { method: 'HEAD' });
-                      console.log('✅ Image URL test result:', response.status);
-                      Alert.alert('Image URL Test', `Image URL accessible: ${response.status === 200 ? 'Yes' : 'No'}`);
-                    } else {
-                      Alert.alert('Image URL Test', 'No photos to test');
-                    }
-                  } catch (error) {
-                    console.error('❌ Image URL test failed:', error);
-                    Alert.alert('Image URL Test', 'Image URL not accessible');
-                  }
-                }}
-              >
-                <Text style={styles.debugButtonText}>🖼️ Test Image URLs</Text>
-              </TouchableOpacity>
-            </GlassCard>
-          )}
-        </View>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyText}>No Photos Yet</Text>
+            <Text style={styles.emptySubtext}>
+              Tap the + button above to add your first photo
+            </Text>
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -400,111 +334,92 @@ export const DashboardScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f3460',
+    backgroundColor: '#000000',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    marginHorizontal: 20,
-    marginTop: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
+    fontSize: 34,
+    fontWeight: '700',
     color: '#ffffff',
+    letterSpacing: 0.3,
   },
   headerButtons: {
     flexDirection: 'row',
+    alignItems: 'center',
   },
-  glassHeaderButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  headerButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    marginLeft: 8,
   },
   headerButtonText: {
-    fontSize: 20,
+    fontSize: 24,
     color: '#ffffff',
+    lineHeight: 28,
+    marginTop: -2, // Visual alignment for the + symbol
   },
   content: {
     flex: 1,
-    paddingHorizontal: 20,
-    maxWidth: isWeb ? 1200 : '100%',
-    alignSelf: 'center',
-    width: '100%',
+    backgroundColor: '#000000',
   },
-  section: {
-    marginBottom: 30,
-  },
-  sectionTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#ffffff',
-    marginBottom: 16,
+  scrollContent: {
+    paddingBottom: 20,
   },
   photoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginTop: 10,
-    justifyContent: isWeb ? 'flex-start' : 'space-between',
+    padding: 1, // Creates a thin border effect between photos
   },
   photoItem: {
     width: getPhotoItemWidth(),
     height: getPhotoItemWidth(),
-    margin: isWeb ? 6 : 4,
+    padding: 0.5, // Half of the grid padding for even spacing
   },
   loadingContainer: {
-    flexDirection: 'row',
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 40,
+    paddingVertical: 60,
   },
   loadingText: {
     fontSize: 16,
     color: 'rgba(255, 255, 255, 0.7)',
-    marginLeft: 12,
+    marginTop: 12,
+    fontWeight: '500',
   },
   emptyState: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 60,
-    paddingHorizontal: 20,
+    paddingHorizontal: 32,
   },
   emptyText: {
-    fontSize: 20,
+    fontSize: 24,
     color: '#ffffff',
+    fontWeight: '600',
     textAlign: 'center',
     marginBottom: 8,
   },
   emptySubtext: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.6)',
     textAlign: 'center',
-    marginBottom: 20,
-  },
-  debugButton: {
-    backgroundColor: 'rgba(233, 69, 96, 0.2)',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(233, 69, 96, 0.3)',
-  },
-  debugButtonText: {
-    color: '#e94560',
-    textAlign: 'center',
-    fontSize: 14,
-    fontWeight: '500',
+    lineHeight: 22,
   },
   buttonDisabled: {
-    opacity: 0.6,
+    opacity: 0.5,
   },
 }); 
