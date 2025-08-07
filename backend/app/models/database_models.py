@@ -1,5 +1,6 @@
 import uuid
-from sqlalchemy import Column, String, TIMESTAMP, ForeignKey, ARRAY, JSON, Text, CheckConstraint, Boolean, Float
+from datetime import datetime
+from sqlalchemy import Column, String, TIMESTAMP, ForeignKey, ARRAY, JSON, Text, CheckConstraint, Boolean, Float, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY as PG_ARRAY
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.types import Float
@@ -19,6 +20,7 @@ class User(Base):
     last_login = Column(TIMESTAMP)
     settings = Column(JSONB, default={})
     photos = relationship("Photo", back_populates="user")
+    albums = relationship("Album", back_populates="user")
 
 class Photo(Base):
     __tablename__ = "photos"
@@ -58,14 +60,28 @@ class Album(Base):
     __tablename__ = "albums"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    name = Column(String)
+    name = Column(String, nullable=False)
     description = Column(String)
     is_public = Column(Boolean, default=False)
     photo_ids = Column(PG_ARRAY(UUID(as_uuid=True)))
     cluster_ids = Column(PG_ARRAY(UUID(as_uuid=True)))
-    cover_photo_id = Column(UUID(as_uuid=True), ForeignKey("photos.id"))
-    created_at = Column(TIMESTAMP)
-    updated_at = Column(TIMESTAMP)
+    cover_photo_id = Column(UUID(as_uuid=True), ForeignKey("photos.id"), nullable=True)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="albums")
+    shares = relationship("AlbumShare", back_populates="album")
+    cover_photo = relationship("Photo", foreign_keys=[cover_photo_id])
+
+class AlbumMember(Base):
+    __tablename__ = "album_members"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    album_id = Column(UUID(as_uuid=True), ForeignKey("albums.id"))
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    role = Column(String, default="member")  # 'owner', 'admin', 'member'
+    joined_at = Column(TIMESTAMP, server_default=func.now())
+    invited_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
 
 class QRLink(Base):
     __tablename__ = "qr_links"
@@ -83,3 +99,19 @@ class PhotoFeedback(Base):
     photo_id = Column(UUID(as_uuid=True), ForeignKey("photos.id"))
     reason = Column(String)
     created_at = Column(TIMESTAMP)
+
+class AlbumShare(Base):
+    __tablename__ = "album_shares"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    album_id = Column(UUID(as_uuid=True), ForeignKey("albums.id"), nullable=False)
+    shared_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    shared_with_email = Column(String, nullable=False)
+    shared_with_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    permissions = Column(String, default="view")  # view, edit, admin
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    accepted_at = Column(TIMESTAMP, nullable=True)
+
+    # Relationships
+    album = relationship("Album", back_populates="shares")
+    shared_by_user = relationship("User", foreign_keys=[shared_by])
+    shared_with_user = relationship("User", foreign_keys=[shared_with_user_id])

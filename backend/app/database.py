@@ -13,3 +13,10 @@ engine = create_engine(
     poolclass=NullPool,  # Good for scripts and dev; use a real pool in prod
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
