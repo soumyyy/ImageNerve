@@ -8,7 +8,13 @@ import {
   Animated,
   ScrollView,
   Alert,
+  Platform,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
+import * as Sharing from 'expo-sharing';
+import { photosAPI } from '../services/api';
+import { BlurView } from 'expo-blur';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Photo } from '../types';
 import { PhotoImage } from './PhotoImage';
@@ -20,6 +26,7 @@ interface PhotoViewerProps {
   initialIndex: number;
   userId: string;
   onClose: () => void;
+  onDeleted?: (photoId: string) => void;
 }
 
 export const PhotoViewer: React.FC<PhotoViewerProps> = ({
@@ -27,6 +34,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
   initialIndex,
   userId,
   onClose,
+  onDeleted,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [showMetadata, setShowMetadata] = useState(false);
@@ -115,28 +123,87 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
     }).start();
   };
 
-  const handleDownload = () => {
-    Alert.alert(
-      'Download Photo',
-      'Download functionality coming soon!',
-      [{ text: 'OK' }]
-    );
+  const handleDownload = async () => {
+    try {
+      console.log('⬇️ Download requested for index', currentIndex, 'photo', currentPhoto?.id, currentPhoto?.filename);
+      const filename = currentPhoto.filename;
+      const { url } = await photosAPI.getDownloadUrl(filename, userId);
+      console.log('Download URL received:', url);
+      if (Platform.OS === 'web') {
+        // Web: download via backend proxy to avoid S3 CORS
+        const streamUrl = photosAPI.getWebDownloadStreamUrl(filename);
+        const objectUrl = streamUrl; // Let browser handle streaming download
+        const a = document.createElement('a');
+        a.href = objectUrl;
+        a.download = filename || 'image.jpg';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        return;
+      }
+      const tmpPath = `${FileSystem.cacheDirectory}${filename}`;
+      const { uri } = await FileSystem.downloadAsync(url, tmpPath);
+      const perm = await MediaLibrary.requestPermissionsAsync();
+      if (!perm.granted) throw new Error('Media Library permission denied');
+      const asset = await MediaLibrary.createAssetAsync(uri);
+      await MediaLibrary.createAlbumAsync('ImageNerve', asset, false);
+      Alert.alert('Saved', 'Photo saved to your library.');
+    } catch (e: any) {
+      console.error('Download error:', e);
+      if (Platform.OS === 'ios' && await Sharing.isAvailableAsync()) {
+        try {
+          const filename = currentPhoto.filename;
+          const { url } = await photosAPI.getDownloadUrl(filename, userId);
+          await Sharing.shareAsync(url);
+          return;
+        } catch {}
+      }
+      Alert.alert('Download failed', e?.message || 'Unable to save photo');
+    }
   };
 
   const handleDelete = () => {
+    console.log('🗑️ Delete requested for index', currentIndex, 'photo', currentPhoto?.id);
+
+    const performDelete = async () => {
+      try {
+        console.log('Calling delete API...');
+        await photosAPI.deletePhoto(currentPhoto.id, userId);
+        if (Platform.OS !== 'web') {
+          Alert.alert('Deleted', 'Photo has been deleted');
+        }
+        if (onDeleted) onDeleted(currentPhoto.id);
+        if (currentIndex < photos.length - 1) {
+          setCurrentIndex(currentIndex + 1);
+        } else if (currentIndex > 0) {
+          setCurrentIndex(currentIndex - 1);
+        } else {
+          onClose();
+        }
+      } catch (e: any) {
+        console.error('Delete error:', e);
+        if (Platform.OS !== 'web') {
+          Alert.alert('Delete failed', e?.message || 'Unable to delete photo');
+        }
+      }
+    };
+
+    if (Platform.OS === 'web') {
+      // Web: use confirm() since Alert buttons do not work in RN Web
+      // eslint-disable-next-line no-alert
+      const ok = (globalThis as any).confirm?.('Delete Photo? This action cannot be undone.') ?? false;
+      if (ok) {
+        performDelete();
+      }
+      return;
+    }
+
     Alert.alert(
       'Delete Photo',
       'Are you sure you want to delete this photo? This action cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
-          style: 'destructive',
-          onPress: () => {
-            // TODO: Implement delete functionality
-            Alert.alert('Delete', 'Delete functionality coming soon!');
-          }
-        }
+        { text: 'Delete', style: 'destructive', onPress: performDelete }
       ]
     );
   };
@@ -272,12 +339,15 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
         </View>
 
         {/* Liquid Glass Dock */}
-        <View style={styles.dock}>
-          <View style={styles.dockContent}>
+        <View style={styles.dockWrapper} pointerEvents="box-none">
+          <View style={styles.dock} pointerEvents="box-none">
+            <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFillObject as any} pointerEvents="none" />
+            <View style={styles.dockContent}>
             {/* Navigation */}
             <View style={styles.dockLeft}>
               {currentIndex > 0 && (
                 <TouchableOpacity
+                  accessibilityRole="button"
                   style={styles.dockButton}
                   onPress={() => handleSwipe('right')}
                 >
@@ -289,6 +359,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
             {/* Center Actions */}
             <View style={styles.dockCenter}>
               <TouchableOpacity 
+                accessibilityRole="button"
                 style={styles.dockButton}
                 onPress={toggleMetadata}
               >
@@ -296,6 +367,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
               </TouchableOpacity>
               
               <TouchableOpacity 
+                accessibilityRole="button"
                 style={styles.dockButton}
                 onPress={() => handleDownload()}
               >
@@ -303,6 +375,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
               </TouchableOpacity>
               
               <TouchableOpacity 
+                accessibilityRole="button"
                 style={styles.dockButton}
                 onPress={() => handleDelete()}
               >
@@ -314,6 +387,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
             <View style={styles.dockRight}>
               {currentIndex < photos.length - 1 && (
                 <TouchableOpacity
+                  accessibilityRole="button"
                   style={styles.dockButton}
                   onPress={() => handleSwipe('left')}
                 >
@@ -321,14 +395,17 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
                 </TouchableOpacity>
               )}
             </View>
+            </View>
           </View>
         </View>
 
         {/* Metadata Panel */}
         <Animated.View
+          pointerEvents={showMetadata ? 'auto' : 'none'}
           style={[
             styles.metadataPanel,
             {
+              zIndex: showMetadata ? 100 : -1,
               transform: [
                 {
                   translateY: metadataAnim.interpolate({
@@ -683,15 +760,17 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   dock: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingBottom: 30,
     paddingTop: 20,
+  },
+  dockWrapper: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingBottom: 0,
   },
   dockContent: {
     flexDirection: 'row',

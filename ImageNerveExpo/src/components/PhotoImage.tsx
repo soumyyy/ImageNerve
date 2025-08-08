@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Image, ActivityIndicator, Animated } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Animated } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { Photo } from '../types';
 import { photosAPI } from '../services/api';
+import Shimmer from './Shimmer';
 
 interface PhotoImageProps {
   photo: Photo;
@@ -78,9 +80,7 @@ export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId, style }) 
   if (!imageUrl) {
     return (
       <View style={styles.photoImageContainer}>
-        <View style={styles.photoLoading}>
-          <ActivityIndicator size="small" color="#e94560" />
-        </View>
+        <Shimmer style={styles.photoLoading} />
       </View>
     );
   }
@@ -88,17 +88,20 @@ export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId, style }) 
   return (
     <View style={styles.photoImageContainer}>
       {isLoading && (
-        <View style={[styles.photoLoading, { position: 'absolute', zIndex: 1 }]}>
-          <ActivityIndicator size="small" color="#e94560" />
+        <View style={{ position: 'absolute', zIndex: 1, width: '100%', height: '100%' }}>
+          <Shimmer style={styles.photoLoading} />
         </View>
       )}
-      <Animated.View style={[styles.imageContainer, { opacity: fadeAnim }]}>
-        <Image 
+      <Animated.View style={[styles.imageContainer, { opacity: fadeAnim }]}>        
+        <ExpoImage
           source={{ uri: imageUrl }}
           style={[styles.photoImage, style]}
           onError={handleImageError}
-          onLoad={handleImageLoad}
-          resizeMode={style ? "contain" : "cover"}
+          onLoad={handleImageLoad as any}
+          contentFit={style ? 'contain' : 'cover'}
+          transition={200}
+          cachePolicy="memory-disk"
+          recyclingKey={photo.id}
         />
       </Animated.View>
     </View>

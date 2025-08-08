@@ -14,6 +14,8 @@
 
 ## ✅ COMPLETED FEATURES
 
+> Decision note: Email-based album sharing is PAUSED. We will move forward with link/QR-based sharing flows instead. Existing email sharing code remains available but should be hidden in the UI until further notice.
+
 ### 🔧 Backend Infrastructure
 - [x] **FastAPI Project Structure**
   - Modular architecture with `app/` directory
@@ -160,6 +162,18 @@
   );
   ```
 
+- [ ] **Album Members Table** - For album membership and roles (defined in models; API not exposed yet) ✅ **NEW**
+  ```sql
+  CREATE TABLE album_members (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    album_id UUID NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT DEFAULT 'member', -- 'owner', 'admin', 'member'
+    joined_at TIMESTAMP DEFAULT NOW(),
+    invited_by UUID REFERENCES users(id)
+  );
+  ```
+
 - [x] **QR Links Table** - For sharing functionality
   ```sql
   CREATE TABLE qr_links (
@@ -203,7 +217,7 @@
   - `embedder.py` - Face embedding extraction
   - `utils.py` - Face processing utilities
 
-### 🔗 Shared Album System ✅ **NEW**
+### 🔗 Shared Album System (Email-based) ✅ Implemented, currently PAUSED
 - [x] **Album Sharing Backend**
   - `AlbumShareService` for managing shared albums
   - Share albums via email with permissions
@@ -222,7 +236,7 @@
   - `GET /album-shares/album/{album_id}/shares` - Get album shares
   - `GET /album-shares/album/{album_id}/shared-photos` - Get shared photos
 
-- [x] **Frontend Shared Album UI** ✅ **NEW**
+- [x] **Frontend Shared Album UI** ✅ Implemented with mocks — PAUSED
   - `SharedAlbumsScreen` with liquid glass design
   - Tab navigation between shared and pending albums
   - Accept/decline share invitations
@@ -236,7 +250,7 @@
   - Visual swipe indicator
   - Pan gesture handler integration
 
-- [x] **Share Album Modal** ✅ **NEW**
+- [x] **Share Album Modal** ✅ Implemented — PAUSED
   - `ShareAlbumModal` component
   - Email input with validation
   - Permission selection (view/edit/admin)
@@ -284,16 +298,34 @@
    - User registration/login endpoints
    - Protected routes and user-specific data
 
-2. **Photo Management Enhancements**
+2. **Share Link / QR-based Sharing (New Direction)** ✅ **NEW**
+   - Backend: Implement share link endpoints using `qr_links` table
+     - `POST /qr/share` - Create share link (resource_type: album/photo, resource_id, permissions, expires_at, optional password)
+     - `GET /qr/resolve/{token}` - Resolve token to resource + permissions
+     - `GET /qr/album/{token}/photos` - Get photos via token (album)
+     - `DELETE /qr/{token}` - Revoke share link
+   - Frontend: Replace email sharing with link/QR
+     - Add "Share via link" action on album/photo
+     - Show generated URL and QR code
+     - Copy/share system sheet integration
+     - Open-link screen to consume token and show content
+
+3. **Photo Management Enhancements**
    - Implement actual delete photo functionality
    - Implement actual download photo functionality
    - Add photo editing capabilities
    - Add photo sharing features
 
-3. **Face Recognition Integration**
+4. **Face Recognition Integration**
    - Integrate face detection with photo upload
    - Add face clustering visualization
    - Implement face search functionality
+
+4. **Album Sharing Frontend Integration** ✅ **NEW**
+   - Implement album sharing API client in `ImageNerveExpo/src/services/api.ts`
+   - Replace mock data in `SharedAlbumsScreen` with real API calls
+   - Implement `ShareAlbumModal` UI and wire up share flow
+   - Add error handling and loading states
 
 ### 🎯 Medium Priority (Next week)
 1. **Authentication System**
@@ -338,7 +370,7 @@
 - [x] `POST /albums/{album_id}/clusters` - Add clusters to album ✅
 - [x] `GET /albums/{album_id}/stats` - Get album statistics ✅
 
-#### 🔗 Album Sharing Endpoints (Fully Implemented) ✅ **NEW**
+#### 🔗 Album Sharing Endpoints (Email) ✅ Implemented — PAUSED
 - [x] `POST /album-shares/share` - Share album with email ✅
 - [x] `GET /album-shares/shared-with-me` - Get shared albums ✅
 - [x] `GET /album-shares/pending-invitations` - Get pending invitations ✅
@@ -349,11 +381,11 @@
 - [x] `GET /album-shares/album/{album_id}/shares` - Get album shares ✅
 - [x] `GET /album-shares/album/{album_id}/shared-photos` - Get shared photos ✅
 
-#### 🔗 QR Code Endpoints (Placeholder Only)
-- [ ] `POST /qr/` - Generate QR code for resource
-- [ ] `GET /qr/{code}` - Get resource by QR code
-- [ ] `GET /qr/` - List user's QR codes
-- [ ] `DELETE /qr/{code}` - Delete QR code
+#### 🔗 Share Link / QR Endpoints (To Implement) ✅ **NEW DIRECTION**
+- [ ] `POST /qr/share` - Create share link (tokenized)
+- [ ] `GET /qr/resolve/{token}` - Resolve token → resource + permissions
+- [ ] `GET /qr/album/{token}/photos` - Access shared album photos via token
+- [ ] `DELETE /qr/{token}` - Revoke share link
 
 #### 🤖 Face Recognition Endpoints (Fully Implemented) ✅
 - [x] `POST /faces/detect` - Detect faces in image
@@ -543,6 +575,7 @@
 - Placeholder delete/download functionality (need to implement actual features)
 - No rate limiting implemented
 - Could add more comprehensive error handling
+- Shared albums (email) UI present but PAUSED — hide behind flag until link/QR sharing lands ✅ **NEW**
 
 ---
 

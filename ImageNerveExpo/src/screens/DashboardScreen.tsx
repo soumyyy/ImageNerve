@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform, Dimensions, FlatList, ListRenderItemInfo, Image as RNImage, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { pickImage } from '../utils/imageUtils';
 import { getMimeType } from '../utils/fileUtils';
-import { photosAPI, facesAPI } from '../services/api';
-import { Photo } from '../types';
+import { photosAPI, facesAPI, albumsAPI } from '../services/api';
+import { Photo, Album } from '../types';
 import { PhotoImage } from '../components/PhotoImage';
 import { PhotoViewer } from '../components/PhotoViewer';
+import AlbumCard from '../components/AlbumCard';
+import NewAlbumModal from '../components/NewAlbumModal';
 
 // Get screen dimensions for responsive design
 const { width: screenWidth } = Dimensions.get('window');
@@ -29,17 +31,23 @@ interface DashboardScreenProps {
 
 export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPress }) => {
   const [photos, setPhotos] = useState<Photo[]>([]);
+  const [albums, setAlbums] = useState<Album[]>([]);
+  const [albumPreviews, setAlbumPreviews] = useState<Record<string, Photo[]>>({});
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
+  const [scope, setScope] = useState<'mine' | 'everyone'>('mine');
+  const [tab, setTab] = useState<'photos' | 'albums'>('photos');
+  const numColumns = isWeb && isLargeScreen ? 6 : (isWeb ? 4 : 3);
+  const [showNewAlbum, setShowNewAlbum] = useState(false);
+  const [showAddMenu, setShowAddMenu] = useState(false);
   
   // Test user ID for development
   const userId = 'test-user-001';
 
   useEffect(() => {
-    // Only load data on mount, no test needed in production
     loadUserData();
-  }, []);
+  }, [scope, tab]);
 
   const testAPIConnection = async () => {
     try {
@@ -55,29 +63,71 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const loadUserData = async () => {
     setLoading(true);
     try {
-      // Load user's photos
-      console.log('🔍 Loading photos for user:', userId);
-      const userPhotos = await photosAPI.getUserPhotos(userId);
-      console.log('📸 Loaded photos:', userPhotos);
-      console.log('📊 Photo count:', userPhotos.length);
-      
-      // Log each photo's details
-      userPhotos.forEach((photo: Photo, index: number) => {
-        console.log(`📷 Photo ${index + 1}:`, {
-          id: photo.id,
-          filename: photo.filename,
-          s3_url: photo.s3_url,
-          user_id: photo.user_id
-        });
-      });
-      
-      setPhotos(userPhotos);
+      if (tab === 'photos') {
+        // Photos
+        const userPhotos = scope === 'everyone' ? await photosAPI.getPublicPhotos() : await photosAPI.getUserPhotos(userId);
+        setPhotos(userPhotos);
+      }
+
+      // Albums for both tabs (used by albums tab and the bottom row in photos tab)
+      const includePublic = scope === 'everyone';
+      const userAlbums = await albumsAPI.getUserAlbums(userId, includePublic);
+      setAlbums(userAlbums);
+      const previews: Record<string, Photo[]> = {};
+      await Promise.all(userAlbums.slice(0, 12).map(async (a: any) => {
+        try {
+          const res = await albumsAPI.getAlbumPhotos(a.id, userId);
+          previews[a.id] = res.photos.slice(0, 4);
+        } catch {}
+      }));
+      setAlbumPreviews(previews);
     } catch (error) {
       console.error('❌ Error loading user data:', error);
       Alert.alert('Error', 'Failed to load your photos');
     } finally {
       setLoading(false);
     }
+  };
+
+  // Prefetch upcoming images for smooth scrolling
+  const prefetchAroundIndex = async (index: number) => {
+    const prefetchCount = 12;
+    const start = Math.max(0, index);
+    const end = Math.min(photos.length, index + prefetchCount);
+    for (let i = start; i < end; i++) {
+      const p = photos[i];
+      if (!p) continue;
+      try {
+        const { url } = await photosAPI.getDownloadUrl(p.filename, userId);
+        RNImage.prefetch(url);
+      } catch {}
+    }
+  };
+
+  const onViewableItemsChanged = React.useRef((info: any) => {
+    const items = info.viewableItems as Array<{ index: number | null }>;
+    const last = items[items.length - 1];
+    const idx = last?.index ?? null;
+    if (typeof idx === 'number') prefetchAroundIndex(idx + 1);
+  }).current;
+
+  const viewabilityConfig = React.useRef({ itemVisiblePercentThreshold: 60 } as any).current;
+
+  const renderPhotoItem = ({ item, index }: ListRenderItemInfo<Photo>) => (
+    <TouchableOpacity 
+      key={item.id}
+      style={styles.photoItem}
+      activeOpacity={0.7}
+      onPress={() => handlePhotoPress(index)}
+    >
+      <PhotoImage photo={item} userId={userId} />
+    </TouchableOpacity>
+  );
+
+  const getItemLayout = (_: any, index: number) => {
+    const size = getPhotoItemWidth();
+    const row = Math.floor(index / numColumns);
+    return { length: size, offset: row * size, index };
   };
 
   const handlePhotoUpload = async () => {
@@ -334,6 +384,11 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
         initialIndex={selectedPhotoIndex}
         userId={userId}
         onClose={handleCloseViewer}
+        onDeleted={(photoId) => {
+          setPhotos((prev) => prev.filter((p) => p.id !== photoId));
+          // If list becomes empty, close viewer
+          if (photos.length <= 1) setSelectedPhotoIndex(null);
+        }}
       />
     );
   }
@@ -342,6 +397,14 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Photos</Text>
+        <View style={styles.scopeToggle}>
+          <TouchableOpacity onPress={() => setScope('mine')} style={[styles.scopeBtn, scope==='mine' && styles.scopeBtnActive]}>
+            <Text style={[styles.scopeText, scope==='mine' && styles.scopeTextActive]}>My</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setScope('everyone')} style={[styles.scopeBtn, scope==='everyone' && styles.scopeBtnActive]}>
+            <Text style={[styles.scopeText, scope==='everyone' && styles.scopeTextActive]}>Everyone</Text>
+          </TouchableOpacity>
+        </View>
         <TouchableOpacity 
           style={styles.profileButton}
           onPress={onSettingsPress}
@@ -356,30 +419,78 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
+        {/* Tabs */}
+        <View style={styles.tabs}>
+          <TouchableOpacity onPress={() => setTab('photos')} style={[styles.tabBtn, tab==='photos' && styles.tabActive]}>
+            <Text style={[styles.tabText, tab==='photos' && styles.tabTextActive]}>Photos</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setTab('albums')} style={[styles.tabBtn, tab==='albums' && styles.tabActive]}>
+            <Text style={[styles.tabText, tab==='albums' && styles.tabTextActive]}>Albums</Text>
+          </TouchableOpacity>
+        </View>
+
         {loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#ffffff" />
             <Text style={styles.loadingText}>Loading your photos...</Text>
           </View>
-        ) : photos.length > 0 ? (
-          <View style={styles.photoGrid}>
-            {photos.map((photo, index) => (
-              <TouchableOpacity 
-                key={photo.id} 
-                style={styles.photoItem} 
-                activeOpacity={0.7}
-                onPress={() => handlePhotoPress(index)}
-              >
-                <PhotoImage photo={photo} userId={userId} />
-              </TouchableOpacity>
+        ) : tab === 'photos' ? (
+          photos.length > 0 ? (
+            <FlatList
+              data={photos}
+              renderItem={renderPhotoItem}
+              keyExtractor={(item) => item.id}
+              numColumns={numColumns}
+              removeClippedSubviews
+              initialNumToRender={24}
+              maxToRenderPerBatch={32}
+              windowSize={12}
+              updateCellsBatchingPeriod={50}
+              getItemLayout={getItemLayout}
+              onViewableItemsChanged={onViewableItemsChanged}
+              viewabilityConfig={viewabilityConfig}
+              contentContainerStyle={{ paddingBottom: 16 }}
+            />
+          ) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyText}>No Photos Yet</Text>
+              <Text style={styles.emptySubtext}>
+                Tap the + button below to add your first photo
+              </Text>
+            </View>
+          )
+        ) : (
+          // Albums Tab
+          <View style={styles.albumsGrid}>
+            {albums.map((a) => (
+              <AlbumCard
+                key={a.id}
+                title={a.name}
+                count={a.photo_ids?.length || 0}
+                photos={albumPreviews[a.id] || []}
+              />
             ))}
           </View>
-        ) : (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>No Photos Yet</Text>
-            <Text style={styles.emptySubtext}>
-              Tap the + button below to add your first photo
-            </Text>
+        )}
+
+        {/* Albums Row */}
+        {tab === 'photos' && albums.length > 0 && (
+          <View style={styles.albumsSection}>
+            <View style={styles.albumsHeader}>
+              <Text style={styles.albumsTitle}>Albums</Text>
+              <TouchableOpacity><Text style={styles.albumsModify}>Modify</Text></TouchableOpacity>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.albumsRow}>
+              {albums.map((a) => (
+                <AlbumCard
+                  key={a.id}
+                  title={a.name}
+                  count={a.photo_ids?.length || 0}
+                  photos={albumPreviews[a.id] || []}
+                  onPress={() => { /* TODO: navigate to album details */ }}
+                />
+              ))}
+            </ScrollView>
           </View>
         )}
       </ScrollView>
@@ -387,16 +498,60 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
       {/* Floating Add Button */}
       <TouchableOpacity 
         style={[styles.floatingAddButton, uploading && styles.buttonDisabled]} 
-        onPress={handlePhotoUpload}
-        disabled={uploading}
+        onPress={() => setShowAddMenu(true)}
         activeOpacity={0.8}
       >
-        {uploading ? (
-          <ActivityIndicator size="small" color="#ffffff" />
-        ) : (
-          <Text style={styles.floatingAddButtonText}>+</Text>
-        )}
+        <Text style={styles.floatingAddButtonText}>+</Text>
       </TouchableOpacity>
+
+      {/* Add Menu (Action Sheet) */}
+      <Modal visible={showAddMenu} transparent animationType="fade" onRequestClose={() => setShowAddMenu(false)}>
+        <View style={styles.menuOverlay}>
+          <View style={styles.menuCard}>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                setShowNewAlbum(true);
+                setTimeout(() => setShowAddMenu(false), 0);
+              }}
+            >
+              <Text style={styles.menuItemText}>New Album</Text>
+            </TouchableOpacity>
+            <View style={styles.menuDivider} />
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={async () => {
+                setTimeout(() => setShowAddMenu(false), 0);
+                await handlePhotoUpload();
+              }}
+            >
+              <Text style={styles.menuItemText}>Upload Photo</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.menuItem, styles.menuCancel]}
+              onPress={() => {
+                setTimeout(() => setShowAddMenu(false), 0);
+              }}
+            >
+              <Text style={[styles.menuItemText, styles.menuCancelText]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <NewAlbumModal
+        visible={showNewAlbum}
+        userId={userId}
+        onClose={() => setShowNewAlbum(false)}
+        onCreated={async () => {
+          // refresh albums immediately
+          try {
+            const includePublic = scope === 'everyone';
+            const userAlbums = await albumsAPI.getUserAlbums(userId, includePublic);
+            setAlbums(userAlbums);
+          } catch {}
+        }}
+      />
     </SafeAreaView>
   );
 };
@@ -415,6 +570,24 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255, 255, 255, 0.1)',
   },
+  scopeToggle: {
+    flexDirection: 'row',
+    gap: 8,
+    position: 'absolute',
+    left: '50%',
+    transform: [{ translateX: -50 } as any],
+  },
+  scopeBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.1)'
+  },
+  scopeBtnActive: {
+    backgroundColor: 'rgba(255,255,255,0.25)'
+  },
+  scopeText: { color: 'rgba(255,255,255,0.75)' },
+  scopeTextActive: { color: '#fff', fontWeight: '700' },
   headerTitle: {
     fontSize: 34,
     fontWeight: '700',
@@ -440,6 +613,22 @@ const styles = StyleSheet.create({
     paddingBottom: 100, // Space for floating button and future albums
     paddingHorizontal: 0, // No horizontal padding to ensure images touch edges
   },
+  tabs: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 4,
+    gap: 8,
+  },
+  tabBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.1)'
+  },
+  tabActive: { backgroundColor: 'rgba(255,255,255,0.25)' },
+  tabText: { color: 'rgba(255,255,255,0.75)' },
+  tabTextActive: { color: '#fff', fontWeight: '700' },
   photoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -453,6 +642,12 @@ const styles = StyleSheet.create({
     margin: 0,
     padding: 0,
   },
+  albumsSection: { marginTop: 16 },
+  albumsHeader: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 8 },
+  albumsTitle: { color: '#fff', fontSize: 22, fontWeight: '700' },
+  albumsModify: { color: '#0a84ff' },
+  albumsRow: { paddingHorizontal: 16, paddingBottom: 24 },
+  albumsGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, paddingTop: 8 },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',
@@ -512,5 +707,39 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     opacity: 0.5,
+  },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end'
+  },
+  menuCard: {
+    backgroundColor: '#111',
+    padding: 12,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)'
+  },
+  menuItem: {
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+  },
+  menuDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.08)'
+  },
+  menuItemText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600'
+  },
+  menuCancel: {
+    marginTop: 8,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.08)'
+  },
+  menuCancelText: {
+    color: 'rgba(255,255,255,0.8)'
   },
 }); 

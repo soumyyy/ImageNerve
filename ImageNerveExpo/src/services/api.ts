@@ -146,9 +146,31 @@ export const photosAPI = {
     return response.data;
   },
 
+  getWebDownloadStreamUrl: (filename: string) => {
+    // For web, stream through backend proxy to avoid S3 CORS
+    return `${API_BASE_URL}/photos/s3/proxy-download?filename=${encodeURIComponent(filename)}`;
+  },
+
   getPublicPhotos: async () => {
     const response = await api.get('/photos/public');
     return response.data;
+  },
+  deletePhoto: async (photoId: string, userId: string) => {
+    const url = `/photos/${photoId}?user_id=${userId}`;
+    try {
+      console.log('🗑️ Deleting photo:', { photoId, userId, url: `${API_BASE_URL}${url}` });
+      const response = await api.delete(url);
+      console.log('✅ Delete response:', response.status, response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Delete failed:', {
+        url: `${API_BASE_URL}${url}`,
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message
+      });
+      throw error;
+    }
   },
 };
 
@@ -189,13 +211,19 @@ export const facesAPI = {
 // Albums API
 export const albumsAPI = {
   createAlbum: async (albumData: {
-    user_id: string;
+    userId: string;
     name: string;
     description?: string;
-    is_public?: boolean;
-    cover_photo_id?: string;
+    isPublic?: boolean;
+    coverPhotoId?: string;
   }) => {
-    const response = await api.post('/albums/', albumData);
+    const params = new URLSearchParams();
+    params.append('user_id', albumData.userId);
+    params.append('name', albumData.name);
+    if (albumData.description) params.append('description', albumData.description);
+    if (typeof albumData.isPublic === 'boolean') params.append('is_public', String(albumData.isPublic));
+    if (albumData.coverPhotoId) params.append('cover_photo_id', albumData.coverPhotoId);
+    const response = await api.post(`/albums/?${params.toString()}`);
     return response.data;
   },
 
@@ -207,6 +235,58 @@ export const albumsAPI = {
   getAlbum: async (albumId: string, userId?: string) => {
     const params = userId ? `?user_id=${userId}` : '';
     const response = await api.get(`/albums/${albumId}${params}`);
+    return response.data;
+  },
+
+  listPublicAlbums: async (limit: number = 50) => {
+    const response = await api.get(`/albums/public?limit=${limit}`);
+    return response.data;
+  },
+
+  getAlbumPhotos: async (albumId: string, userId?: string) => {
+    const params = userId ? `?user_id=${userId}` : '';
+    const response = await api.get(`/albums/${albumId}/photos${params}`);
+    return response.data as { album_id: string; photos: Photo[]; photo_count: number };
+  },
+
+  getAlbumStats: async (albumId: string, userId?: string) => {
+    const params = userId ? `?user_id=${userId}` : '';
+    const response = await api.get(`/albums/${albumId}/stats${params}`);
+    return response.data;
+  },
+
+  updateAlbum: async (
+    albumId: string,
+    params: { userId: string; name?: string; description?: string; isPublic?: boolean; coverPhotoId?: string }
+  ) => {
+    const qs = new URLSearchParams();
+    qs.append('user_id', params.userId);
+    if (typeof params.name === 'string') qs.append('name', params.name);
+    if (typeof params.description === 'string') qs.append('description', params.description);
+    if (typeof params.isPublic === 'boolean') qs.append('is_public', String(params.isPublic));
+    if (typeof params.coverPhotoId === 'string') qs.append('cover_photo_id', params.coverPhotoId);
+    const response = await api.put(`/albums/${albumId}?${qs.toString()}`);
+    return response.data;
+  },
+
+  deleteAlbum: async (albumId: string, userId: string) => {
+    const response = await api.delete(`/albums/${albumId}?user_id=${userId}`);
+    return response.data;
+  },
+
+  addPhotosToAlbum: async (albumId: string, userId: string, photoIds: string[]) => {
+    const qs = new URLSearchParams();
+    qs.append('user_id', userId);
+    photoIds.forEach((id) => qs.append('photo_ids', id));
+    const response = await api.post(`/albums/${albumId}/photos?${qs.toString()}`);
+    return response.data;
+  },
+
+  removePhotosFromAlbum: async (albumId: string, userId: string, photoIds: string[]) => {
+    const qs = new URLSearchParams();
+    qs.append('user_id', userId);
+    photoIds.forEach((id) => qs.append('photo_ids', id));
+    const response = await api.delete(`/albums/${albumId}/photos?${qs.toString()}`);
     return response.data;
   },
 };

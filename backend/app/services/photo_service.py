@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
 from sqlalchemy.orm import Session, load_only
-from app.models.database_models import Photo, User
+from app.models.database_models import Photo, User, Album, FaceEmbedding
+from app.services import s3_service
 from app.utils.logger import get_logger, log_db_operation
 from typing import List, Optional
 from sqlalchemy import text
@@ -165,14 +166,68 @@ class PhotoService:
         return photo
 
     def delete_photo(self, photo_id: str) -> bool:
-        """Delete a photo from the database."""
-        photo = self.get_photo_by_id(photo_id)
-        if not photo:
+        """Delete a photo everywhere: DB, S3, remove references in albums and face embeddings."""
+        try:
+            photo = self.get_photo_by_id(photo_id)
+            if not photo:
+                return False
+
+            # Attempt to delete from S3 using the filename as the key
+            s3_key = None
+            if photo.filename:
+                s3_key = photo.filename
+            elif photo.s3_url:
+                # Fallback: derive key from URL path
+                try:
+                    from urllib.parse import urlparse
+                    path = urlparse(photo.s3_url).path
+                    s3_key = path.lstrip('/')
+                except Exception:
+                    s3_key = None
+
+            if s3_key:
+                try:
+                    self.logger.info(f"🧹 Deleting S3 object | Key: {s3_key}")
+                    s3_service.delete_file(s3_key)
+                    self.logger.info("✅ S3 object deleted")
+                except Exception as e:
+                    # Log but continue with DB cleanup
+                    self.logger.warning(f"⚠️ Failed to delete S3 object '{s3_key}': {str(e)}")
+
+            # Remove from any albums (photo_ids arrays) and fix cover photos
+            try:
+                albums_with_photo = (
+                    self.db.query(Album)
+                    .filter(Album.photo_ids != None)
+                    .filter(Album.photo_ids.contains([photo.id]))
+                    .all()
+                )
+                for album in albums_with_photo:
+                    album.photo_ids = [pid for pid in (album.photo_ids or []) if pid != photo.id]
+                    if album.cover_photo_id == photo.id:
+                        album.cover_photo_id = None
+                # Also update albums where cover only matches
+                albums_with_cover = self.db.query(Album).filter(Album.cover_photo_id == photo.id).all()
+                for album in albums_with_cover:
+                    album.cover_photo_id = None
+            except Exception as e:
+                self.logger.warning(f"⚠️ Failed updating album references for photo {photo_id}: {str(e)}")
+
+            # Delete face embeddings referencing this photo
+            try:
+                self.db.query(FaceEmbedding).filter(FaceEmbedding.photo_id == photo.id).delete(synchronize_session=False)
+            except Exception as e:
+                self.logger.warning(f"⚠️ Failed deleting face embeddings for photo {photo_id}: {str(e)}")
+
+            # Finally delete the photo record
+            self.db.delete(photo)
+            self.db.commit()
+            self.logger.info(f"🗑️ Deleted photo {photo_id} from DB, removed album refs and face embeddings")
+            return True
+        except Exception as e:
+            self.db.rollback()
+            self.logger.error(f"❌ Failed to delete photo {photo_id}: {str(e)}")
             return False
-        
-        self.db.delete(photo)
-        self.db.commit()
-        return True
     
     def _ensure_test_user_exists(self, user_uuid: uuid.UUID):
         """Ensure test user exists in database for development."""
