@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session, load_only
 from app.models.database_models import Photo, User, Album, FaceEmbedding
 from app.services import s3_service
+from app.services.album_service import AlbumService
 from app.utils.logger import get_logger, log_db_operation
 from typing import List, Optional
 from sqlalchemy import text
@@ -75,6 +76,18 @@ class PhotoService:
             log_db_operation("insert", "photos", str(photo_id), True, f"User: {user_id} | File: {filename}")
             self.logger.info(f"✅ Photo record created successfully | Photo ID: {photo_id} | User: {user_id}")
             
+            # Ensure photo is part of a default album
+            try:
+                album_service = AlbumService(self.db)
+                default_album = album_service.get_or_create_default_album(user_id)
+                photo_ids = set(default_album.photo_ids or [])
+                photo_ids.add(photo.id)
+                default_album.photo_ids = list(photo_ids)
+                self.db.commit()
+                self.logger.info(f"📚 Photo {photo_id} added to default album '{default_album.name}'")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Failed to add photo {photo_id} to default album: {str(e)}")
+
             return photo
             
         except Exception as e:

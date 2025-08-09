@@ -61,7 +61,7 @@ export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId, style }) 
     // Fade in animation
     Animated.timing(fadeAnim, {
       toValue: 1,
-      duration: 300,
+      duration: 450,
       useNativeDriver: true,
     }).start();
   };
@@ -88,9 +88,9 @@ export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId, style }) 
   return (
     <View style={styles.photoImageContainer}>
       {isLoading && (
-        <View style={{ position: 'absolute', zIndex: 1, width: '100%', height: '100%' }}>
+        <Animated.View style={{ position: 'absolute', zIndex: 1, width: '100%', height: '100%', opacity: fadeAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) }}>
           <Shimmer style={styles.photoLoading} />
-        </View>
+        </Animated.View>
       )}
       <Animated.View style={[styles.imageContainer, { opacity: fadeAnim }]}>        
         <ExpoImage
@@ -128,11 +128,12 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     borderRadius: 0,
+    backgroundColor: '#000',
     margin: 0,
     padding: 0,
   },
   photoLoading: {
-    backgroundColor: 'rgba(26, 26, 46, 0.8)',
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
     justifyContent: 'center',
     alignItems: 'center',
     borderRadius: 0,
@@ -142,7 +143,7 @@ const styles = StyleSheet.create({
     padding: 0,
   },
   photoError: {
-    backgroundColor: 'rgba(26, 26, 46, 0.8)',
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
     justifyContent: 'center',
     alignItems: 'center',
     borderRadius: 0,

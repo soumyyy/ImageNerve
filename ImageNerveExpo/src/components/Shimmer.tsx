@@ -8,13 +8,13 @@ interface ShimmerProps {
 }
 
 export const Shimmer: React.FC<ShimmerProps> = ({ style, borderRadius = 0 }) => {
-  const translateX = useRef(new Animated.Value(-200)).current;
+  const translateX = useRef(new Animated.Value(-220)).current;
 
   useEffect(() => {
     const loop = Animated.loop(
       Animated.timing(translateX, {
-        toValue: 200,
-        duration: 1200,
+        toValue: 220,
+        duration: 1600,
         useNativeDriver: true,
       })
     );
@@ -26,7 +26,7 @@ export const Shimmer: React.FC<ShimmerProps> = ({ style, borderRadius = 0 }) => 
     <View style={[styles.container, style, { borderRadius }]}>      
       <Animated.View style={[styles.shimmerOverlay, { transform: [{ translateX }] }]}>        
         <LinearGradient
-          colors={["rgba(255,255,255,0)", "rgba(255,255,255,0.25)", "rgba(255,255,255,0)"]}
+          colors={["rgba(0,0,0,0)", "rgba(255,255,255,0.12)", "rgba(0,0,0,0)"]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
           style={StyleSheet.absoluteFillObject}
@@ -38,7 +38,7 @@ export const Shimmer: React.FC<ShimmerProps> = ({ style, borderRadius = 0 }) => 
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
     overflow: 'hidden',
   },
   shimmerOverlay: {

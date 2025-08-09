@@ -13,22 +13,19 @@ const { width: screenWidth } = Dimensions.get('window');
 const cardSize = Math.min(140, Math.floor(screenWidth / 3));
 
 export const AlbumCard: React.FC<AlbumCardProps> = ({ title, count, photos, onPress }) => {
-  const previews = photos.slice(0, 4);
+  const cover = photos?.[0];
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.8}>
-      <View style={styles.previewGrid}>
-        {[0,1,2,3].map(i => (
-          <View key={i} style={styles.previewCell}>
-            {previews[i] ? (
-              <Image source={{ uri: previews[i].s3_url }} style={styles.previewImage} resizeMode="cover" />
-            ) : (
-              <View style={styles.previewPlaceholder} />
-            )}
-          </View>
-        ))}
+    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.85}>
+      <View style={styles.coverWrap}>
+        {cover ? (
+          <Image source={{ uri: cover.s3_url }} style={styles.coverImage} resizeMode="cover" />
+        ) : (
+          <View style={styles.previewPlaceholder} />
+        )}
+        <View style={styles.badge}><Text style={styles.badgeText}>{count}</Text></View>
       </View>
       <Text style={styles.title} numberOfLines={1}>{title}</Text>
-      <Text style={styles.count}>{count} {count === 1 ? 'item' : 'items'}</Text>
+      <Text style={styles.count}>{count === 1 ? '1 item' : `${count} items`}</Text>
     </TouchableOpacity>
   );
 };
@@ -38,27 +35,28 @@ const styles = StyleSheet.create({
     width: cardSize,
     marginRight: 12,
   },
-  previewGrid: {
+  coverWrap: {
     width: '100%',
     height: cardSize,
     backgroundColor: '#111',
     borderRadius: 12,
     overflow: 'hidden',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
   },
-  previewCell: {
-    width: '50%',
-    height: '50%',
-  },
-  previewImage: {
-    width: '100%',
-    height: '100%',
-  },
+  coverImage: { width: '100%', height: '100%' },
   previewPlaceholder: {
     flex: 1,
     backgroundColor: '#1c1c1e',
   },
+  badge: {
+    position: 'absolute',
+    right: 8,
+    bottom: 8,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  badgeText: { color: '#fff', fontWeight: '700', fontSize: 12 },
   title: {
     color: '#fff',
     fontSize: 14,

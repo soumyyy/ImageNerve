@@ -64,6 +64,8 @@ export const photosAPI = {
     tags?: string[];
     description?: string;
     is_public?: boolean;
+    album_ids?: string[];
+    skip_default_album?: boolean;
   }) => {
     console.log('📤 Creating photo record:', {
       filename: photoData.filename,

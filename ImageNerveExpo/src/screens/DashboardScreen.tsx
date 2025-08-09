@@ -8,7 +8,9 @@ import { Photo, Album } from '../types';
 import { PhotoImage } from '../components/PhotoImage';
 import { PhotoViewer } from '../components/PhotoViewer';
 import AlbumCard from '../components/AlbumCard';
+import AlbumDetailsScreen from './AlbumDetailsScreen';
 import NewAlbumModal from '../components/NewAlbumModal';
+import AlbumPickerModal from '../components/AlbumPickerModal';
 
 // Get screen dimensions for responsive design
 const { width: screenWidth } = Dimensions.get('window');
@@ -36,11 +38,13 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
+  const [openAlbumId, setOpenAlbumId] = useState<string | null>(null);
   const [scope, setScope] = useState<'mine' | 'everyone'>('mine');
   const [tab, setTab] = useState<'photos' | 'albums'>('photos');
   const numColumns = isWeb && isLargeScreen ? 6 : (isWeb ? 4 : 3);
   const [showNewAlbum, setShowNewAlbum] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [showAlbumPicker, setShowAlbumPicker] = useState<null | { photoId?: string; purpose: 'assign-existing' | 'upload-new' }>(null);
   
   // Test user ID for development
   const userId = 'test-user-001';
@@ -130,7 +134,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
     return { length: size, offset: row * size, index };
   };
 
-  const handlePhotoUpload = async () => {
+  const handlePhotoUpload = async (targetAlbumId?: string) => {
     try {
       setUploading(true);
       console.log('📸 Starting photo upload process...');
@@ -299,6 +303,8 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
         filename: uploadUrlResponse.sanitizedFilename,
         description: 'Uploaded from mobile app',
         is_public: false,
+        album_ids: targetAlbumId ? [targetAlbumId] : undefined,
+        skip_default_album: !!targetAlbumId,
         photo_metadata: imageMetadata,
       };
 
@@ -316,6 +322,16 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
           const filteredPhotos = prevPhotos.filter(p => p.id !== tempPhoto.id);
           return [photo, ...filteredPhotos];
         });
+
+        // If an album was chosen, add photo to that album
+        if (targetAlbumId) {
+          try {
+            console.log('📚 Adding photo to album:', targetAlbumId);
+            await albumsAPI.addPhotosToAlbum(targetAlbumId, userId, [photo.id]);
+          } catch (albumErr) {
+            console.warn('⚠️ Failed to add photo to selected album:', albumErr);
+          }
+        }
       } catch (error: any) {
         console.error('❌ Failed to create photo record:', {
           error: error.response?.data?.detail || error.message,
@@ -393,16 +409,30 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
     );
   }
 
+  if (openAlbumId) {
+    return (
+      <AlbumDetailsScreen
+        albumId={openAlbumId}
+        userId={userId}
+        onBack={() => setOpenAlbumId(null)}
+        onOpenPhoto={(index, albumPhotos) => {
+          setPhotos(albumPhotos);
+          setSelectedPhotoIndex(index);
+        }}
+      />
+    );
+  }
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Photos</Text>
-        <View style={styles.scopeToggle}>
-          <TouchableOpacity onPress={() => setScope('mine')} style={[styles.scopeBtn, scope==='mine' && styles.scopeBtnActive]}>
-            <Text style={[styles.scopeText, scope==='mine' && styles.scopeTextActive]}>My</Text>
+        <View style={styles.headerTabs}>
+          <TouchableOpacity onPress={() => setTab('photos')} style={[styles.headerTabBtn, tab==='photos' && styles.headerTabActive]}>
+            <Text style={[styles.headerTabText, tab==='photos' && styles.headerTabTextActive]}>Photos</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setScope('everyone')} style={[styles.scopeBtn, scope==='everyone' && styles.scopeBtnActive]}>
-            <Text style={[styles.scopeText, scope==='everyone' && styles.scopeTextActive]}>Everyone</Text>
+          <TouchableOpacity onPress={() => setTab('albums')} style={[styles.headerTabBtn, tab==='albums' && styles.headerTabActive]}>
+            <Text style={[styles.headerTabText, tab==='albums' && styles.headerTabTextActive]}>Albums</Text>
           </TouchableOpacity>
         </View>
         <TouchableOpacity 
@@ -414,86 +444,86 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
         </TouchableOpacity>
       </View>
       
-      <ScrollView 
-        style={styles.content} 
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-      >
-        {/* Tabs */}
-        <View style={styles.tabs}>
-          <TouchableOpacity onPress={() => setTab('photos')} style={[styles.tabBtn, tab==='photos' && styles.tabActive]}>
-            <Text style={[styles.tabText, tab==='photos' && styles.tabTextActive]}>Photos</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setTab('albums')} style={[styles.tabBtn, tab==='albums' && styles.tabActive]}>
-            <Text style={[styles.tabText, tab==='albums' && styles.tabTextActive]}>Albums</Text>
-          </TouchableOpacity>
-        </View>
+      {/* Tabs */}
+      {/* Removed top Photos/Albums toggle; now in header */}
 
-        {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#ffffff" />
-            <Text style={styles.loadingText}>Loading your photos...</Text>
-          </View>
-        ) : tab === 'photos' ? (
-          photos.length > 0 ? (
-            <FlatList
-              data={photos}
-              renderItem={renderPhotoItem}
-              keyExtractor={(item) => item.id}
-              numColumns={numColumns}
-              removeClippedSubviews
-              initialNumToRender={24}
-              maxToRenderPerBatch={32}
-              windowSize={12}
-              updateCellsBatchingPeriod={50}
-              getItemLayout={getItemLayout}
-              onViewableItemsChanged={onViewableItemsChanged}
-              viewabilityConfig={viewabilityConfig}
-              contentContainerStyle={{ paddingBottom: 16 }}
-            />
-          ) : (
+      {/* Below: Me/Everyone icon-only toggle */}
+      <View style={styles.scopeIconToggle}>
+        <TouchableOpacity onPress={() => setScope('mine')} style={[styles.scopeIconBtn, scope==='mine' && styles.scopeBtnActive]}>
+          <Text style={[styles.scopeIconText, scope==='mine' && styles.scopeTextActive]}>👤</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => setScope('everyone')} style={[styles.scopeIconBtn, scope==='everyone' && styles.scopeBtnActive]}>
+          <Text style={[styles.scopeIconText, scope==='everyone' && styles.scopeTextActive]}>👥</Text>
+        </TouchableOpacity>
+      </View>
+
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#ffffff" />
+          <Text style={styles.loadingText}>Loading your photos...</Text>
+        </View>
+      ) : tab === 'photos' ? (
+        <FlatList
+          key={`photos_${numColumns}`}
+          data={photos}
+          renderItem={renderPhotoItem}
+          keyExtractor={(item) => item.id}
+          numColumns={numColumns}
+          removeClippedSubviews
+          initialNumToRender={24}
+          maxToRenderPerBatch={32}
+          windowSize={12}
+          updateCellsBatchingPeriod={50}
+          getItemLayout={getItemLayout}
+          onViewableItemsChanged={onViewableItemsChanged}
+          viewabilityConfig={viewabilityConfig}
+          contentContainerStyle={{ paddingBottom: 16, minHeight: 200 }}
+          ListEmptyComponent={
             <View style={styles.emptyState}>
               <Text style={styles.emptyText}>No Photos Yet</Text>
-              <Text style={styles.emptySubtext}>
-                Tap the + button below to add your first photo
-              </Text>
+              <Text style={styles.emptySubtext}>Tap the + button below to add your first photo</Text>
             </View>
-          )
-        ) : (
-          // Albums Tab
-          <View style={styles.albumsGrid}>
-            {albums.map((a) => (
-              <AlbumCard
-                key={a.id}
-                title={a.name}
-                count={a.photo_ids?.length || 0}
-                photos={albumPreviews[a.id] || []}
-              />
-            ))}
-          </View>
-        )}
-
-        {/* Albums Row */}
-        {tab === 'photos' && albums.length > 0 && (
-          <View style={styles.albumsSection}>
-            <View style={styles.albumsHeader}>
-              <Text style={styles.albumsTitle}>Albums</Text>
-              <TouchableOpacity><Text style={styles.albumsModify}>Modify</Text></TouchableOpacity>
-            </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.albumsRow}>
-              {albums.map((a) => (
-                <AlbumCard
-                  key={a.id}
-                  title={a.name}
-                  count={a.photo_ids?.length || 0}
-                  photos={albumPreviews[a.id] || []}
-                  onPress={() => { /* TODO: navigate to album details */ }}
-                />
-              ))}
-            </ScrollView>
-          </View>
-        )}
-      </ScrollView>
+          }
+          ListFooterComponent={
+            albums.length > 0 ? (
+              <View style={styles.albumsSection}>
+                <View style={styles.albumsHeader}>
+                  <Text style={styles.albumsTitle}>Albums</Text>
+                  <TouchableOpacity><Text style={styles.albumsModify}>Modify</Text></TouchableOpacity>
+                </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.albumsRow}>
+                  {albums.map((a) => (
+                    <AlbumCard
+                      key={a.id}
+                      title={a.name}
+                      count={a.photo_ids?.length || 0}
+                      photos={albumPreviews[a.id] || []}
+                      onPress={() => setOpenAlbumId(a.id)}
+                    />
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null
+          }
+        />
+      ) : (
+        <FlatList
+          key={`albums_${2}`}
+          data={albums}
+          keyExtractor={(a) => a.id}
+          renderItem={({ item }) => (
+            <AlbumCard
+              key={item.id}
+              title={item.name}
+              count={item.photo_ids?.length || 0}
+              photos={albumPreviews[item.id] || []}
+              onPress={() => setOpenAlbumId(item.id)}
+            />
+          )}
+          numColumns={2}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 120 }}
+        />
+      )}
 
       {/* Floating Add Button */}
       <TouchableOpacity 
@@ -520,12 +550,27 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
             <View style={styles.menuDivider} />
             <TouchableOpacity
               style={styles.menuItem}
-              onPress={async () => {
+              onPress={() => {
+                // Choose album first, then upload from device to that album
+                setShowAlbumPicker({ purpose: 'upload-new' });
                 setTimeout(() => setShowAddMenu(false), 0);
-                await handlePhotoUpload();
               }}
             >
-              <Text style={styles.menuItemText}>Upload Photo</Text>
+              <Text style={styles.menuItemText}>Upload From Device to Album</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                // If there is at least one photo, offer to add it to album
+                if (photos.length > 0) {
+                  setShowAlbumPicker({ photoId: photos[0].id, purpose: 'assign-existing' });
+                } else {
+                  setShowNewAlbum(true);
+                }
+                setTimeout(() => setShowAddMenu(false), 0);
+              }}
+            >
+              <Text style={styles.menuItemText}>Add Photo To Album</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.menuItem, styles.menuCancel]}
@@ -552,6 +597,40 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
           } catch {}
         }}
       />
+
+      <AlbumPickerModal
+        visible={!!showAlbumPicker}
+        userId={userId}
+        onClose={() => setShowAlbumPicker(null)}
+        onPick={async (albumId) => {
+          try {
+            if (showAlbumPicker?.purpose === 'assign-existing') {
+              const photoId = showAlbumPicker?.photoId;
+              if (photoId) {
+                await albumsAPI.addPhotosToAlbum(albumId, userId, [photoId]);
+              }
+            } else if (showAlbumPicker?.purpose === 'upload-new') {
+              await handlePhotoUpload(albumId);
+            }
+
+            // refresh previews
+            const previews: Record<string, Photo[]> = {} as any;
+            const userAlbums = await albumsAPI.getUserAlbums(userId, scope === 'everyone');
+            setAlbums(userAlbums);
+            await Promise.all(userAlbums.slice(0, 12).map(async (a: any) => {
+              try {
+                const res = await albumsAPI.getAlbumPhotos(a.id, userId);
+                previews[a.id] = res.photos.slice(0, 4);
+              } catch {}
+            }));
+            setAlbumPreviews(previews);
+          } catch (e) {
+            console.log('Album operation failed', e);
+          } finally {
+            setShowAlbumPicker(null);
+          }
+        }}
+      />
     </SafeAreaView>
   );
 };
@@ -566,7 +645,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 4,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255, 255, 255, 0.1)',
   },
@@ -589,10 +668,10 @@ const styles = StyleSheet.create({
   scopeText: { color: 'rgba(255,255,255,0.75)' },
   scopeTextActive: { color: '#fff', fontWeight: '700' },
   headerTitle: {
-    fontSize: 34,
+    fontSize: 24,
     fontWeight: '700',
     color: '#ffffff',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
   profileButton: {
     width: 40,
@@ -616,10 +695,42 @@ const styles = StyleSheet.create({
   tabs: {
     flexDirection: 'row',
     paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 4,
+    paddingTop: 6,
+    paddingBottom: 2,
     gap: 8,
   },
+  headerTabs: {
+    flexDirection: 'row',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 14,
+    padding: 2,
+  },
+  headerTabBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  headerTabActive: {
+    backgroundColor: 'rgba(255,255,255,0.25)'
+  },
+  headerTabText: { color: 'rgba(255,255,255,0.75)' },
+  headerTabTextActive: { color: '#fff', fontWeight: '700' },
+  scopeIconToggle: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingBottom: 6,
+    gap: 8,
+  },
+  scopeIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scopeIconText: { color: 'rgba(255,255,255,0.75)', fontSize: 16 },
   tabBtn: {
     paddingHorizontal: 12,
     paddingVertical: 6,

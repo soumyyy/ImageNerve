@@ -1,84 +1,78 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Dimensions, ActivityIndicator } from 'react-native';
 import { albumsAPI } from '../services/api';
 import { Photo } from '../types';
 import { PhotoImage } from '../components/PhotoImage';
 
+const { width: screenWidth } = Dimensions.get('window');
+
 interface AlbumDetailsScreenProps {
   albumId: string;
   userId: string;
-  onBack?: () => void;
+  onBack: () => void;
+  onOpenPhoto?: (index: number, photos: Photo[]) => void;
 }
 
-export const AlbumDetailsScreen: React.FC<AlbumDetailsScreenProps> = ({ albumId, userId, onBack }) => {
-  const [loading, setLoading] = useState(true);
-  const [album, setAlbum] = useState<any>(null);
+const getItemSize = () => screenWidth / 3;
+
+export const AlbumDetailsScreen: React.FC<AlbumDetailsScreenProps> = ({ albumId, userId, onBack, onOpenPhoto }) => {
   const [photos, setPhotos] = useState<Photo[]>([]);
-  const [stats, setStats] = useState<any>(null);
+  const [title, setTitle] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
-        const [a, p, s] = await Promise.all([
-          albumsAPI.getAlbum(albumId, userId),
-          albumsAPI.getAlbumPhotos(albumId, userId),
-          albumsAPI.getAlbumStats(albumId, userId),
-        ]);
-        setAlbum(a);
-        setPhotos(p.photos);
-        setStats(s);
-      } catch (e) {
-        // noop basic
+        const album = await albumsAPI.getAlbum(albumId, userId);
+        setTitle(album.name);
+        const res = await albumsAPI.getAlbumPhotos(albumId, userId);
+        setPhotos(res.photos);
       } finally {
         setLoading(false);
       }
     })();
   }, [albumId, userId]);
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backButton}><Text style={styles.backText}>‹</Text></TouchableOpacity>
-        <Text style={styles.title}>{album?.name || 'Album'}</Text>
-        <View style={{ width: 32 }} />
-      </View>
-      {loading ? (
-        <View style={styles.loading}><ActivityIndicator color="#fff" /></View>
-      ) : (
-        <ScrollView contentContainerStyle={styles.content}>
-          <Text style={styles.metaPrimary}>{stats?.photo_count ?? photos.length} items · Owner: {album?.owner_id?.slice(0,8)}</Text>
-          <Text style={styles.metaSecondary}>
-            Created {new Date(album?.created_at || Date.now()).toDateString()}
-          </Text>
-          {!!album?.description && <Text style={styles.description}>{album.description}</Text>}
+  const renderItem = ({ item, index }: { item: Photo; index: number }) => (
+    <TouchableOpacity onPress={() => onOpenPhoto?.(index, photos)} activeOpacity={0.7} style={{ width: getItemSize(), height: getItemSize() }}>
+      <PhotoImage photo={item} userId={userId} />
+    </TouchableOpacity>
+  );
 
-          <View style={styles.grid}>
-            {photos.map((p) => (
-              <View key={p.id} style={styles.gridItem}>
-                <PhotoImage photo={p} userId={userId} />
-              </View>
-            ))}
-          </View>
-        </ScrollView>
-      )}
-    </SafeAreaView>
+  if (loading) {
+    return (
+      <View style={styles.container}> 
+        <View style={styles.header}><Text style={styles.headerTitle}>Album</Text></View>
+        <ActivityIndicator color="#fff" />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={onBack} style={styles.backBtn}><Text style={styles.backText}>‹</Text></TouchableOpacity>
+        <Text style={styles.headerTitle}>{title}</Text>
+        <View style={{ width: 40 }} />
+      </View>
+      <FlatList
+        data={photos}
+        renderItem={renderItem}
+        keyExtractor={(p) => p.id}
+        numColumns={3}
+        initialNumToRender={24}
+        removeClippedSubviews
+      />
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.1)' },
-  backButton: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.15)' },
-  backText: { color: '#fff', fontSize: 20 },
-  title: { color: '#fff', fontSize: 20, fontWeight: '700' },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  content: { padding: 16 },
-  metaPrimary: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  metaSecondary: { color: 'rgba(255,255,255,0.6)', marginTop: 4 },
-  description: { color: 'rgba(255,255,255,0.85)', marginTop: 8 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 16 },
-  gridItem: { width: '33.3333%', aspectRatio: 1 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 },
+  headerTitle: { color: '#fff', fontSize: 20, fontWeight: '700' },
+  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+  backText: { color: '#fff', fontSize: 24 },
 });
 
 export default AlbumDetailsScreen;

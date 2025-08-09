@@ -60,6 +60,32 @@ class AlbumService:
             self.db.rollback()
             logger.error(f"Error creating album: {str(e)}")
             raise
+
+    def get_or_create_default_album(self, user_id: str) -> Album:
+        """Return the user's default "My Photos" album, creating it if needed."""
+        user_uuid = self._convert_user_id_to_uuid(user_id)
+        album = (
+            self.db.query(Album)
+            .filter(Album.user_id == user_uuid, Album.name == 'My Photos')
+            .first()
+        )
+        if album:
+            return album
+        # Create default album
+        album = Album(
+            id=uuid.uuid4(),
+            user_id=user_uuid,
+            name='My Photos',
+            description='All your photos',
+            is_public=False,
+            photo_ids=[],
+            cluster_ids=[],
+            created_at=datetime.utcnow(),
+        )
+        self.db.add(album)
+        self.db.commit()
+        self.db.refresh(album)
+        return album
     
     def get_album_by_id(self, album_id: str, user_id: Optional[str] = None) -> Optional[Album]:
         """Get a specific album by ID."""
