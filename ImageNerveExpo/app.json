@@ -16,7 +16,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Allow ImageNerve to access your photo library.",
-        "NSPhotoLibraryAddUsageDescription": "Allow ImageNerve to save photos to your library."
+        "NSPhotoLibraryAddUsageDescription": "Allow ImageNerve to save photos to your library.",
+        "UIApplicationSupportsIndirectInputEvents": true
       }
     },
     "android": {

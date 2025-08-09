@@ -44,10 +44,10 @@ export const pickImage = async (): Promise<ImagePickerResult | null> => {
       // For iOS and Android
       result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'] as any,
-        allowsEditing: true,
-        aspect: [4, 3] as [number, number],
-        quality: 0.8,
-      });
+        allowsEditing: false,
+        quality: 1,
+        presentationStyle: 'fullScreen',
+      } as any);
       
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];

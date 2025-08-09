@@ -35,6 +35,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [albums, setAlbums] = useState<Album[]>([]);
   const [albumPreviews, setAlbumPreviews] = useState<Record<string, Photo[]>>({});
+  const [albumCounts, setAlbumCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
@@ -78,13 +79,16 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
       const userAlbums = await albumsAPI.getUserAlbums(userId, includePublic);
       setAlbums(userAlbums);
       const previews: Record<string, Photo[]> = {};
+      const counts: Record<string, number> = {};
       await Promise.all(userAlbums.slice(0, 12).map(async (a: any) => {
         try {
           const res = await albumsAPI.getAlbumPhotos(a.id, userId);
           previews[a.id] = res.photos.slice(0, 4);
+          counts[a.id] = res.photo_count ?? res.photos.length;
         } catch {}
       }));
       setAlbumPreviews(previews);
+      setAlbumCounts(counts);
     } catch (error) {
       console.error('❌ Error loading user data:', error);
       Alert.alert('Error', 'Failed to load your photos');
@@ -493,18 +497,19 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
                 </View>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.albumsRow}>
                   {albums.map((a) => (
-                    <AlbumCard
+                  <AlbumCard
                       key={a.id}
                       title={a.name}
-                      count={a.photo_ids?.length || 0}
+                    count={albumCounts[a.id] ?? (a as any)?.photo_count ?? (a.photo_ids?.length || 0)}
                       photos={albumPreviews[a.id] || []}
+                      userId={userId}
                       onPress={() => setOpenAlbumId(a.id)}
                     />
                   ))}
                 </ScrollView>
               </View>
             ) : null
-          }
+          } 
         />
       ) : (
         <FlatList
@@ -515,8 +520,9 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
             <AlbumCard
               key={item.id}
               title={item.name}
-              count={item.photo_ids?.length || 0}
+              count={albumCounts[item.id] ?? (item as any)?.photo_count ?? (item.photo_ids?.length || 0)}
               photos={albumPreviews[item.id] || []}
+              userId={userId}
               onPress={() => setOpenAlbumId(item.id)}
             />
           )}
@@ -541,8 +547,9 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => {
-                setShowNewAlbum(true);
-                setTimeout(() => setShowAddMenu(false), 0);
+                // Close menu first, then open create-album modal to avoid iOS modal stacking freeze
+                setShowAddMenu(false);
+                setTimeout(() => setShowNewAlbum(true), 300);
               }}
             >
               <Text style={styles.menuItemText}>New Album</Text>
@@ -551,26 +558,12 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => {
-                // Choose album first, then upload from device to that album
-                setShowAlbumPicker({ purpose: 'upload-new' });
-                setTimeout(() => setShowAddMenu(false), 0);
+                // Close menu first, then open album picker to avoid iOS modal stacking freeze
+                setShowAddMenu(false);
+                setTimeout(() => setShowAlbumPicker({ purpose: 'upload-new' }), 300);
               }}
             >
-              <Text style={styles.menuItemText}>Upload From Device to Album</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => {
-                // If there is at least one photo, offer to add it to album
-                if (photos.length > 0) {
-                  setShowAlbumPicker({ photoId: photos[0].id, purpose: 'assign-existing' });
-                } else {
-                  setShowNewAlbum(true);
-                }
-                setTimeout(() => setShowAddMenu(false), 0);
-              }}
-            >
-              <Text style={styles.menuItemText}>Add Photo To Album</Text>
+              <Text style={styles.menuItemText}>Add To Album</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.menuItem, styles.menuCancel]}
@@ -601,6 +594,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
       <AlbumPickerModal
         visible={!!showAlbumPicker}
         userId={userId}
+        defaultToMyPhotos={true}
         onClose={() => setShowAlbumPicker(null)}
         onPick={async (albumId) => {
           try {

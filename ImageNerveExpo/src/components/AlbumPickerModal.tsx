@@ -8,9 +8,10 @@ interface AlbumPickerModalProps {
   userId: string;
   onClose: () => void;
   onPick: (albumId: string) => void;
+  defaultToMyPhotos?: boolean;
 }
 
-const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({ visible, userId, onClose, onPick }) => {
+const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({ visible, userId, onClose, onPick, defaultToMyPhotos }) => {
   const [albums, setAlbums] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [showNew, setShowNew] = useState(false);
@@ -22,6 +23,15 @@ const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({ visible, userId, on
       try {
         const res = await albumsAPI.getUserAlbums(userId, false);
         setAlbums(res);
+        if (defaultToMyPhotos) {
+          const my = res.find((a: any) => a.name === 'My Photos');
+          if (my) {
+            // Close first, then notify selection after a short delay to avoid iOS modal conflicts
+            onClose();
+            setTimeout(() => onPick(my.id), 450);
+            return;
+          }
+        }
       } catch {}
       setLoading(false);
     })();
