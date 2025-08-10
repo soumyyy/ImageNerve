@@ -6,6 +6,8 @@ from app.services.face_detection_service import FaceDetectionService
 from typing import List, Optional, Dict, Any
 import numpy as np
 import cv2
+from PIL import Image as PILImage
+import io as _io
 
 class FaceService:
     def __init__(self, db: Session):
@@ -291,6 +293,14 @@ class FaceService:
             for idx, img_bytes in enumerate(images):
                 nparr = np.frombuffer(img_bytes, np.uint8)
                 image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if image is None:
+                    # Try PIL fallback (HEIC decoded by Pillow-heif if installed)
+                    try:
+                        pil_img = PILImage.open(_io.BytesIO(img_bytes)).convert('RGB')
+                        image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+                    except Exception:
+                        diagnostics.append({"index": idx, "accepted": False, "reason": "decode_failed"})
+                        continue
                 if image is None:
                     diagnostics.append({"index": idx, "accepted": False, "reason": "invalid_image"})
                     continue

@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator, Alert, Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+// Removed direct Camera rendering to avoid invalid element errors in Expo Go. We fallback to ImagePicker.
+import * as ImageManipulator from 'expo-image-manipulator';
+// (removed duplicate React import)
 import { facesAPI } from '../services/api';
 
 interface FaceProfileWizardProps {
@@ -20,33 +22,67 @@ const PROMPTS = [
 
 const FaceProfileWizard: React.FC<FaceProfileWizardProps> = ({ visible, userId, onClose, onSaved }) => {
   const [shots, setShots] = useState<Array<{ uri: string }>>([]);
-  const [showLive, setShowLive] = useState(false);
-  const [permission, requestPermission] = useCameraPermissions();
+  const [showLive, setShowLive] = useState(true);
+  const [permissionStatus, setPermissionStatus] = useState<'undetermined' | 'granted' | 'denied'>('undetermined');
+  const [running, setRunning] = useState(false);
+  const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
 
   const takeShot = async () => {
     try {
-      const camPerm = await requestPermission();
+      const camPerm = await ImagePicker.requestCameraPermissionsAsync();
+      setPermissionStatus(camPerm.status as any);
       if (camPerm?.status !== 'granted') {
         Alert.alert('Permission', 'Camera permission required');
         return;
       }
-      // On web, fallback to file picker; on native, use ImagePicker camera
-      if (typeof window !== 'undefined' && (window as any).navigator?.mediaDevices) {
-        // Show live view overlay for guidance on web where possible
-        if (Platform.OS === 'web') {
-          // Direct live capture via CameraView is not supported on web; use ImagePicker as fallback
-          const res = await ImagePicker.launchCameraAsync({ quality: 0.9 } as any);
-          if (!res.canceled && res.assets?.[0]) setShots(prev => [...prev, { uri: res.assets![0].uri }]);
-          return;
-        }
+      if (Platform.OS === 'web') {
+        // Web fallback to browser camera intent
+        const res = await ImagePicker.launchCameraAsync({ quality: 0.9 } as any);
+        if (!res.canceled && res.assets?.[0]) setShots(prev => [...prev, { uri: res.assets![0].uri }]);
+        return;
       }
+      // Native fallback: open camera UI; user taps shutter per shot
       const res = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: 0.9 } as any);
-      if (!res.canceled && res.assets?.[0]) setShots(prev => [...prev, { uri: res.assets![0].uri }]);
+      if (!res.canceled && res.assets?.[0]) {
+        let uri = res.assets![0].uri;
+        // Convert HEIC to JPEG if needed
+        if (uri.toLowerCase().endsWith('.heic') || uri.toLowerCase().endsWith('.heif')) {
+          try {
+            const manipulated = await ImageManipulator.manipulateAsync(uri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG });
+            uri = manipulated.uri;
+          } catch {}
+        }
+        setShots(prev => [...prev, { uri }]);
+      }
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'Failed to capture');
     }
   };
+
+  useEffect(() => {
+    if (!visible) return;
+    (async () => {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      setPermissionStatus(perm.status as any);
+      if (perm?.status !== 'granted') return;
+      if (running) return;
+      setRunning(true);
+      setShots([]);
+      setStep(0);
+      // small warm-up delay
+      await new Promise(r => setTimeout(r, 600));
+      for (let i = 0; i < REQUIRED_SHOTS; i++) {
+        setStep(i);
+        await new Promise(r => setTimeout(r, 600));
+        await takeShot();
+      }
+      setRunning(false);
+      // auto-save
+      await saveProfile();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
 
   const saveProfile = async () => {
     if (shots.length < REQUIRED_SHOTS) return;
@@ -75,14 +111,18 @@ const FaceProfileWizard: React.FC<FaceProfileWizardProps> = ({ visible, userId, 
           <Text style={styles.subtitle}>Capture {REQUIRED_SHOTS} angles: straight, slight left, slight right.</Text>
           <View style={styles.guideBubble}><Text style={styles.guideText}>{PROMPTS[Math.min(shots.length, PROMPTS.length - 1)]}</Text></View>
           {Platform.OS !== 'web' && showLive && (
-            <View style={{ height: 240, borderRadius: 12, overflow: 'hidden', marginTop: 10 }}>
-              <CameraView style={{ flex: 1 }} facing="front" />
+            <View style={styles.liveBox}>
+              <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(255,255,255,0.05)' }]} />
+              <View style={styles.maskContainer}>
+                <View style={styles.circleMask}>
+                  <View style={styles.progressRing}>
+                    <Text style={styles.progressText}>{step + 1}/{REQUIRED_SHOTS}</Text>
+                  </View>
+                </View>
+              </View>
             </View>
           )}
           <View style={styles.row}>
-            <TouchableOpacity style={[styles.btn, styles.capture]} onPress={takeShot} disabled={busy}>
-              <Text style={styles.btnText}>Capture</Text>
-            </TouchableOpacity>
             <View style={styles.counter}><Text style={styles.counterText}>{shots.length}/{REQUIRED_SHOTS}</Text></View>
           </View>
           <View style={styles.row}>
@@ -115,6 +155,11 @@ const styles = StyleSheet.create({
   counterText: { color: '#fff' },
   guideBubble: { marginTop: 8, alignSelf: 'flex-start', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
   guideText: { color: '#fff' },
+  liveBox: { height: 260, borderRadius: 130, overflow: 'hidden', alignSelf: 'center', width: 260, marginTop: 12 },
+  maskContainer: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'transparent' },
+  circleMask: { width: 240, height: 240, borderRadius: 120, borderWidth: 2, borderColor: 'rgba(255,255,255,0.5)', alignItems: 'center', justifyContent: 'center', backgroundColor: 'transparent' },
+  progressRing: { width: 200, height: 200, borderRadius: 100, borderWidth: 2, borderColor: 'rgba(255,255,255,0.25)', alignItems: 'center', justifyContent: 'center' },
+  progressText: { color: '#fff', fontWeight: '700' },
 });
 
 export default FaceProfileWizard;
