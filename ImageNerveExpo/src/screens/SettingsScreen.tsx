@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { photosAPI } from '../services/api';
+import { photosAPI, facesAPI } from '../services/api';
+import FaceProfileWizard from '../components/FaceProfileWizard';
+import * as ImagePicker from 'expo-image-picker';
 
 interface SettingsScreenProps {
   onBackPress?: () => void;
@@ -13,6 +15,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
     totalSize: 0,
     username: 'User',
   });
+  const [showWizard, setShowWizard] = useState(false);
 
   useEffect(() => {
     loadUserStats();
@@ -33,6 +36,29 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
       });
     } catch (error) {
       console.error('Failed to load user stats:', error);
+    }
+  };
+
+  const captureMyFace = async () => {
+    try {
+      const userId = 'test-user-001';
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (perm.status !== 'granted') {
+        Alert.alert('Permission required', 'Camera permission is needed');
+        return;
+      }
+      const photo = await ImagePicker.launchCameraAsync({
+        allowsEditing: false,
+        quality: 0.8,
+      } as any);
+      if (photo.canceled || !photo.assets?.[0]) return;
+      const asset = photo.assets[0];
+      const form = new FormData();
+      form.append('file', { uri: asset.uri, name: 'face.jpg', type: 'image/jpeg' } as any);
+      await facesAPI.setProfileFace(form, userId);
+      Alert.alert('Saved', 'Your face has been set. We will now personalize "Me" tab.');
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'Failed to set profile face');
     }
   };
 
@@ -117,6 +143,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
         {/* General Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>General</Text>
+          <TouchableOpacity style={styles.settingItem} onPress={() => setShowWizard(true)}>
+            <Text style={styles.settingText}>Set/Recalibrate My Face</Text>
+            <Text style={styles.settingArrow}>›</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.settingItem}>
             <Text style={styles.settingText}>Notifications</Text>
             <Text style={styles.settingArrow}>›</Text>
@@ -158,6 +188,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
           </TouchableOpacity>
         </View>
       </ScrollView>
+      <FaceProfileWizard
+        visible={showWizard}
+        userId={'test-user-001'}
+        onClose={() => setShowWizard(false)}
+        onSaved={(d) => console.log('Profile face saved', d)}
+      />
     </SafeAreaView>
   );
 };

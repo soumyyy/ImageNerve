@@ -208,6 +208,36 @@ export const facesAPI = {
     const response = await api.get(`/faces/clusters?user_id=${userId}`);
     return response.data;
   },
+
+  setProfileFace: async (formData: FormData, userId: string) => {
+    const response = await api.post(`/faces/profile?user_id=${userId}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+
+  getMyFacePhotos: async (userId: string, threshold: number = 0.45, limit: number = 200) => {
+    const response = await api.get(`/faces/me/photos?user_id=${userId}&threshold=${threshold}&limit=${limit}`);
+    return response.data as { success: boolean; photos: Photo[] };
+  },
+
+  setProfileFaceBatch: async (formData: FormData, userId: string) => {
+    const response = await api.post(`/faces/profile/batch?user_id=${userId}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
+    });
+    return response.data as { success: boolean; accepted: number; rejected: number; suggested_threshold?: number; diagnostics?: any[] };
+  },
+
+  getProfileStatus: async (userId: string) => {
+    const response = await api.get(`/faces/profile/status?user_id=${userId}`);
+    return response.data as { exists: boolean; threshold?: number };
+  },
+
+  deleteProfileFace: async (userId: string) => {
+    const response = await api.delete(`/faces/profile?user_id=${userId}`);
+    return response.data;
+  },
 };
 
 // Albums API

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform, Dimensions, FlatList, ListRenderItemInfo, Image as RNImage, Modal } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { pickImage } from '../utils/imageUtils';
 import { getMimeType } from '../utils/fileUtils';
@@ -46,6 +47,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const [showNewAlbum, setShowNewAlbum] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showAlbumPicker, setShowAlbumPicker] = useState<null | { photoId?: string; purpose: 'assign-existing' | 'upload-new' }>(null);
+  const [showProfileFaceCta, setShowProfileFaceCta] = useState(false);
   
   // Test user ID for development
   const userId = 'test-user-001';
@@ -70,7 +72,36 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
     try {
       if (tab === 'photos') {
         // Photos
-        const userPhotos = scope === 'everyone' ? await photosAPI.getPublicPhotos() : await photosAPI.getUserPhotos(userId);
+        let userPhotos: Photo[] = [];
+        if (scope === 'everyone') {
+          // Show all photos for the current user account
+          userPhotos = await photosAPI.getUserPhotos(userId);
+        } else {
+          // "Me": if profile face set, prefer those photos. Fallback to own uploads
+          try {
+            const status = await facesAPI.getProfileStatus(userId);
+            if (!status?.exists) {
+              setShowProfileFaceCta(true);
+              setPhotos([]);
+              return;
+            }
+            const thr = typeof status.threshold === 'number' ? status.threshold : 0.45;
+            const mine = await facesAPI.getMyFacePhotos(userId, thr);
+            if (mine?.success && Array.isArray(mine.photos) && mine.photos.length > 0) {
+              userPhotos = mine.photos as any;
+              setShowProfileFaceCta(false);
+            } else {
+              userPhotos = await photosAPI.getUserPhotos(userId);
+              // If backend indicates no profile face, show CTA
+              if (!mine?.success && (mine as any)?.message) {
+                setShowProfileFaceCta(true);
+                userPhotos = [];
+              }
+            }
+          } catch {
+            userPhotos = await photosAPI.getUserPhotos(userId);
+          }
+        }
         setPhotos(userPhotos);
       }
 
@@ -483,10 +514,20 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
           viewabilityConfig={viewabilityConfig}
           contentContainerStyle={{ paddingBottom: 16, minHeight: 200 }}
           ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyText}>No Photos Yet</Text>
-              <Text style={styles.emptySubtext}>Tap the + button below to add your first photo</Text>
-            </View>
+            showProfileFaceCta && scope === 'mine' ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyText}>Set up “My Face”</Text>
+                <Text style={styles.emptySubtext}>Capture your face in Settings to personalize your Me tab.</Text>
+                <TouchableOpacity style={styles.ctaBtn} onPress={() => Alert.alert('Go to Settings', 'Open settings and tap “Capture My Face”.')}>
+                  <Text style={styles.ctaText}>Open Settings</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyText}>No Photos Yet</Text>
+                <Text style={styles.emptySubtext}>Tap the + button below to add your first photo</Text>
+              </View>
+            )
           }
           ListFooterComponent={
             albums.length > 0 ? (
@@ -784,6 +825,17 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.6)',
     textAlign: 'center',
     lineHeight: 22,
+  },
+  ctaBtn: {
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.15)'
+  },
+  ctaText: {
+    color: '#fff',
+    fontWeight: '600'
   },
   floatingAddButton: {
     position: 'absolute',

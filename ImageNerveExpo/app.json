@@ -17,7 +17,8 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Allow ImageNerve to access your photo library.",
         "NSPhotoLibraryAddUsageDescription": "Allow ImageNerve to save photos to your library.",
-        "UIApplicationSupportsIndirectInputEvents": true
+        "UIApplicationSupportsIndirectInputEvents": true,
+        "NSCameraUsageDescription": "Allow ImageNerve to use your camera to capture your face profile."
       }
     },
     "android": {
@@ -26,7 +27,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": ["READ_MEDIA_IMAGES"]
+      "permissions": ["READ_MEDIA_IMAGES", "CAMERA"]
     },
     "web": {
       "favicon": "./assets/favicon.png",
