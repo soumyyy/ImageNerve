@@ -100,8 +100,9 @@ class PhotoService:
         """Get a photo by its ID."""
         return self.db.query(Photo).filter(Photo.id == uuid.UUID(photo_id)).first()
 
-    def get_photos_by_user(self, user_id: str, limit: int = 50) -> List[Photo]:
-        """Get all photos for a specific user."""
+    def get_photos_by_user(self, user_id: str, limit: int = 50, before: Optional[datetime] = None) -> List[Photo]:
+        """Get photos for a user ordered by newest first. If 'before' is provided,
+        return photos strictly older than that timestamp (cursor pagination)."""
         self.logger.info(f"📋 Fetching photos for user | User: {user_id} | Limit: {limit}")
         
         try:
@@ -116,21 +117,17 @@ class PhotoService:
             
             # Order by newest first so recently uploaded photos appear immediately
             # Use a more efficient query with selected columns
-            photos = (
+            q = (
                 self.db.query(Photo)
                 .filter(Photo.user_id == user_uuid)
-                .order_by(Photo.uploaded_at.desc())
-                .options(
-                    # Load only needed columns for initial display
-                    load_only(
-                        Photo.id,
-                        Photo.filename,
-                        Photo.s3_url,
-                        Photo.uploaded_at
-                    )
-                )
-                .limit(limit)
-                .all()
+            )
+            if before is not None:
+                q = q.filter(Photo.uploaded_at < before)
+            photos = (
+                q.order_by(Photo.uploaded_at.desc())
+                 .options(load_only(Photo.id, Photo.filename, Photo.s3_url, Photo.uploaded_at))
+                 .limit(limit)
+                 .all()
             )
             
             log_db_operation("select", "photos", f"user_{user_id}", True, f"Found {len(photos)} photos")

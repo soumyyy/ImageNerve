@@ -311,14 +311,15 @@
      - Open-link screen to consume token and show content
 
 3. **Photo Management Enhancements**
-   - Implement actual delete photo functionality
-   - Implement actual download photo functionality
+   - Implement actual delete photo functionality (wired in UI; backend cascade done)
+   - Implement actual download photo functionality (web proxy done; ensure native save UX)
    - Add photo editing capabilities
    - Add photo sharing features
 
 4. **Face Recognition Integration**
-   - Integrate face detection with photo upload
-   - Add face clustering visualization
+   - Auto pipeline on upload: detect-and-store then debounce cluster ✅ IMPLEMENTED
+   - People tab UI: list clusters with counts and thumbnails → tap to open person detail
+   - Cluster management: rename/merge/delete
    - Implement face search functionality
 
 4. **Album Sharing Frontend Integration** ✅ **NEW**
@@ -337,6 +338,13 @@
    - QR code generation for albums/photos
    - QR code scanning and sharing
    - Public access via QR codes
+
+3. **UI/UX Polish (Photos Tab)** ✅ NEW
+   - Upward infinite scroll model (inverted list) ✅
+   - Albums row behavior: scrolls with list, black background ✅
+   - Floating Me/Everyone toggle with blur and thin icons ✅
+   - Consistent black safe areas (status/bottom) ✅
+   - Subtle separators between thumbnails ✅
 
 3. **User Authentication**
    - Firebase Auth integration

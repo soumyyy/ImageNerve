@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { photosAPI, facesAPI } from '../services/api';
 import FaceProfileWizard from '../components/FaceProfileWizard';
-import * as ImagePicker from 'expo-image-picker';
 
 interface SettingsScreenProps {
   onBackPress?: () => void;
@@ -16,10 +15,20 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
     username: 'User',
   });
   const [showWizard, setShowWizard] = useState(false);
+  const [profileStatus, setProfileStatus] = useState<{ exists: boolean; threshold?: number } | null>(null);
+  const [loadingProfileStatus, setLoadingProfileStatus] = useState(true);
 
   useEffect(() => {
     loadUserStats();
+    loadProfileStatus();
   }, []);
+
+  // Refresh profile status when wizard is closed (in case user cancelled)
+  useEffect(() => {
+    if (!showWizard) {
+      loadProfileStatus();
+    }
+  }, [showWizard]);
 
   const loadUserStats = async () => {
     try {
@@ -39,27 +48,28 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
     }
   };
 
-  const captureMyFace = async () => {
+  const loadProfileStatus = async () => {
     try {
       const userId = 'test-user-001';
-      const perm = await ImagePicker.requestCameraPermissionsAsync();
-      if (perm.status !== 'granted') {
-        Alert.alert('Permission required', 'Camera permission is needed');
-        return;
-      }
-      const photo = await ImagePicker.launchCameraAsync({
-        allowsEditing: false,
-        quality: 0.8,
-      } as any);
-      if (photo.canceled || !photo.assets?.[0]) return;
-      const asset = photo.assets[0];
-      const form = new FormData();
-      form.append('file', { uri: asset.uri, name: 'face.jpg', type: 'image/jpeg' } as any);
-      await facesAPI.setProfileFace(form, userId);
-      Alert.alert('Saved', 'Your face has been set. We will now personalize "Me" tab.');
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Failed to set profile face');
+      const status = await facesAPI.getProfileStatus(userId);
+      setProfileStatus(status);
+    } catch (error) {
+      console.error('Failed to load profile status:', error);
+      // Default to no profile if API fails
+      setProfileStatus({ exists: false });
+    } finally {
+      setLoadingProfileStatus(false);
     }
+  };
+
+  const handleFaceProfileAction = () => {
+    setShowWizard(true);
+  };
+
+  const handleProfileSaved = async (data: any) => {
+    console.log('Profile face saved', data);
+    // Reload profile status after saving
+    await loadProfileStatus();
   };
 
   const formatFileSize = (bytes: number) => {
@@ -140,13 +150,53 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
           </TouchableOpacity>
         </View>
 
+        {/* Face Recognition Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Face Recognition</Text>
+          {loadingProfileStatus ? (
+            <View style={styles.settingItem}>
+              <Text style={[styles.settingText, { color: 'rgba(255, 255, 255, 0.5)' }]}>
+                Loading profile status...
+              </Text>
+            </View>
+          ) : (
+            <>
+              <TouchableOpacity style={styles.settingItem} onPress={handleFaceProfileAction}>
+                <View style={styles.settingContent}>
+                  <Text style={styles.settingText}>
+                    {profileStatus?.exists ? 'Recalibrate Profile' : 'Set My Face Profile'}
+                  </Text>
+                  {profileStatus?.exists && profileStatus.threshold && (
+                    <Text style={styles.settingSubtext}>
+                      Threshold: {profileStatus.threshold.toFixed(2)}
+                    </Text>
+                  )}
+                </View>
+                <Text style={styles.settingArrow}>›</Text>
+              </TouchableOpacity>
+              
+              {profileStatus?.exists ? (
+                <View style={styles.statusCard}>
+                  <Text style={styles.statusText}>✅ Face profile configured</Text>
+                  <Text style={styles.statusSubtext}>
+                    Your photos will appear in the "Me" tab
+                  </Text>
+                </View>
+              ) : (
+                <View style={[styles.statusCard, { backgroundColor: 'rgba(255, 193, 7, 0.15)', borderLeftColor: '#FFC107' }]}>
+                  <Text style={[styles.statusText, { color: '#FFC107' }]}>⚠️ No face profile set</Text>
+                  <Text style={[styles.statusSubtext, { color: 'rgba(255, 193, 7, 0.8)' }]}>
+                    Set your face profile to see your photos in the "Me" tab
+                  </Text>
+                </View>
+              )}
+            </>
+          )}
+        </View>
+
         {/* General Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>General</Text>
-          <TouchableOpacity style={styles.settingItem} onPress={() => setShowWizard(true)}>
-            <Text style={styles.settingText}>Set/Recalibrate My Face</Text>
-            <Text style={styles.settingArrow}>›</Text>
-          </TouchableOpacity>
           <TouchableOpacity style={styles.settingItem}>
             <Text style={styles.settingText}>Notifications</Text>
             <Text style={styles.settingArrow}>›</Text>
@@ -192,7 +242,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
         visible={showWizard}
         userId={'test-user-001'}
         onClose={() => setShowWizard(false)}
-        onSaved={(d) => console.log('Profile face saved', d)}
+        onSaved={handleProfileSaved}
       />
     </SafeAreaView>
   );
@@ -332,13 +382,39 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  settingContent: {
+    flex: 1,
+  },
   settingText: {
     fontSize: 17,
     color: '#ffffff',
   },
+  settingSubtext: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginTop: 2,
+  },
   settingArrow: {
     fontSize: 18,
     color: 'rgba(255, 255, 255, 0.5)',
+  },
+  statusCard: {
+    backgroundColor: 'rgba(0, 122, 255, 0.15)',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#007AFF',
+  },
+  statusText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#007AFF',
+    marginBottom: 4,
+  },
+  statusSubtext: {
+    fontSize: 13,
+    color: 'rgba(0, 122, 255, 0.8)',
   },
   logoutButton: {
     backgroundColor: 'rgba(255, 59, 48, 0.2)',

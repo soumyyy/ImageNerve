@@ -47,3 +47,5 @@ backend/app/database/__pycache__
 
 # typescript
 *.tsbuildinfo
+
+

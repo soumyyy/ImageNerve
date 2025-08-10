@@ -1,7 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator, Alert, Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-// Removed direct Camera rendering to avoid invalid element errors in Expo Go. We fallback to ImagePicker.
+// Lazy-load camera safely; embed only when a valid component is present (e.g., dev build)
+let CameraModule: any = null;
+let EmbeddedCamera: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  CameraModule = require('expo-camera');
+  if (CameraModule && typeof CameraModule.Camera === 'function') {
+    EmbeddedCamera = CameraModule.Camera;
+  }
+} catch {}
 import * as ImageManipulator from 'expo-image-manipulator';
 // (removed duplicate React import)
 import { facesAPI } from '../services/api';
@@ -22,8 +31,10 @@ const PROMPTS = [
 
 const FaceProfileWizard: React.FC<FaceProfileWizardProps> = ({ visible, userId, onClose, onSaved }) => {
   const [shots, setShots] = useState<Array<{ uri: string }>>([]);
-  const [showLive, setShowLive] = useState(true);
+  const canEmbedCamera = Platform.OS !== 'web' && !!EmbeddedCamera && typeof EmbeddedCamera === 'function';
+  const [showLive, setShowLive] = useState(canEmbedCamera);
   const [permissionStatus, setPermissionStatus] = useState<'undetermined' | 'granted' | 'denied'>('undetermined');
+  const cameraRef = useRef<any>(null);
   const [running, setRunning] = useState(false);
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -42,8 +53,23 @@ const FaceProfileWizard: React.FC<FaceProfileWizardProps> = ({ visible, userId, 
         if (!res.canceled && res.assets?.[0]) setShots(prev => [...prev, { uri: res.assets![0].uri }]);
         return;
       }
-      // Native fallback: open camera UI; user taps shutter per shot
-      const res = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: 0.9 } as any);
+      // Native: programmatic capture from embedded Camera in dev build
+      if (cameraRef.current && (cameraRef.current as any).takePictureAsync) {
+        const pic = await (cameraRef.current as any).takePictureAsync({ quality: 0.85, skipProcessing: true } as any);
+        if (pic?.uri) {
+          let uri = pic.uri;
+          if (uri.toLowerCase().endsWith('.heic') || uri.toLowerCase().endsWith('.heif')) {
+            try {
+              const manipulated = await ImageManipulator.manipulateAsync(uri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG });
+              uri = manipulated.uri;
+            } catch {}
+          }
+          setShots(prev => [...prev, { uri }]);
+          return;
+        }
+      }
+      // Fallback to system camera UI
+      const res = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: 0.9, cameraType: 'front' } as any);
       if (!res.canceled && res.assets?.[0]) {
         let uri = res.assets![0].uri;
         // Convert HEIC to JPEG if needed
@@ -110,9 +136,13 @@ const FaceProfileWizard: React.FC<FaceProfileWizardProps> = ({ visible, userId, 
           <Text style={styles.title}>Set My Face</Text>
           <Text style={styles.subtitle}>Capture {REQUIRED_SHOTS} angles: straight, slight left, slight right.</Text>
           <View style={styles.guideBubble}><Text style={styles.guideText}>{PROMPTS[Math.min(shots.length, PROMPTS.length - 1)]}</Text></View>
-          {Platform.OS !== 'web' && showLive && (
+          {canEmbedCamera && showLive && (
             <View style={styles.liveBox}>
-              <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(255,255,255,0.05)' }]} />
+              {EmbeddedCamera ? (
+                <EmbeddedCamera ref={cameraRef} type={'front'} style={StyleSheet.absoluteFillObject} />
+              ) : (
+                <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(255,255,255,0.05)' }]} />
+              )}
               <View style={styles.maskContainer}>
                 <View style={styles.circleMask}>
                   <View style={styles.progressRing}>

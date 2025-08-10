@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform, Dimensions, FlatList, ListRenderItemInfo, Image as RNImage, Modal } from 'react-native';
+import { Animated } from 'react-native';
+import { BlurView } from 'expo-blur';
+import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { pickImage } from '../utils/imageUtils';
@@ -48,6 +51,11 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showAlbumPicker, setShowAlbumPicker] = useState<null | { photoId?: string; purpose: 'assign-existing' | 'upload-new' }>(null);
   const [showProfileFaceCta, setShowProfileFaceCta] = useState(false);
+  const segmentAnim = React.useRef(new Animated.Value(0)).current;
+  const scopeToggleWidth = 96; // fixed width for floating toggle
+  const PAGE_SIZE = 60;
+  const [cursorBefore, setCursorBefore] = useState<string | null>(null);
+  const [isPaginating, setIsPaginating] = useState(false);
   
   // Test user ID for development
   const userId = 'test-user-001';
@@ -55,6 +63,14 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   useEffect(() => {
     loadUserData();
   }, [scope, tab]);
+
+  useEffect(() => {
+    Animated.timing(segmentAnim, {
+      toValue: scope === 'mine' ? 0 : 1,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  }, [scope]);
 
   const testAPIConnection = async () => {
     try {
@@ -75,7 +91,10 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
         let userPhotos: Photo[] = [];
         if (scope === 'everyone') {
           // Show all photos for the current user account
-          userPhotos = await photosAPI.getUserPhotos(userId);
+          const res = await photosAPI.getUserPhotos(userId, { limit: PAGE_SIZE });
+          userPhotos = res;
+          const last = userPhotos[userPhotos.length - 1];
+          setCursorBefore(last ? last.uploaded_at : null);
         } else {
           // "Me": if profile face set, prefer those photos. Fallback to own uploads
           try {
@@ -90,8 +109,11 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
             if (mine?.success && Array.isArray(mine.photos) && mine.photos.length > 0) {
               userPhotos = mine.photos as any;
               setShowProfileFaceCta(false);
+              setCursorBefore(userPhotos[userPhotos.length - 1]?.uploaded_at ?? null);
             } else {
-              userPhotos = await photosAPI.getUserPhotos(userId);
+              const res = await photosAPI.getUserPhotos(userId, { limit: PAGE_SIZE });
+              userPhotos = res;
+              setCursorBefore(userPhotos[userPhotos.length - 1]?.uploaded_at ?? null);
               // If backend indicates no profile face, show CTA
               if (!mine?.success && (mine as any)?.message) {
                 setShowProfileFaceCta(true);
@@ -99,7 +121,9 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
               }
             }
           } catch {
-            userPhotos = await photosAPI.getUserPhotos(userId);
+            const res = await photosAPI.getUserPhotos(userId, { limit: PAGE_SIZE });
+            userPhotos = res;
+            setCursorBefore(userPhotos[userPhotos.length - 1]?.uploaded_at ?? null);
           }
         }
         setPhotos(userPhotos);
@@ -151,6 +175,54 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   }).current;
 
   const viewabilityConfig = React.useRef({ itemVisiblePercentThreshold: 60 } as any).current;
+
+  const loadMore = async () => {
+    if (isPaginating || !cursorBefore || tab !== 'photos' || scope !== 'everyone') return;
+    setIsPaginating(true);
+    try {
+      const more = await photosAPI.getUserPhotos(userId, { limit: PAGE_SIZE, before: cursorBefore });
+      if (Array.isArray(more) && more.length > 0) {
+        setPhotos((prev) => {
+          const existing = new Set(prev.map((p) => p.id));
+          const merged = [...prev];
+          for (const p of more) {
+            if (!existing.has(p.id)) merged.push(p);
+          }
+          return merged;
+        });
+        const last = more[more.length - 1];
+        setCursorBefore(last.uploaded_at);
+      } else {
+        setCursorBefore(null);
+      }
+    } catch (e) {
+      console.warn('Pagination fetch failed', e);
+    } finally {
+      setIsPaginating(false);
+    }
+  };
+
+  // Debounced clustering after uploads
+  const clusterDebounceRef = React.useRef<NodeJS.Timeout | null>(null);
+  const isClusteringRef = React.useRef<boolean>(false);
+  const scheduleClusterRefresh = React.useCallback(() => {
+    try {
+      if (clusterDebounceRef.current) clearTimeout(clusterDebounceRef.current);
+      clusterDebounceRef.current = setTimeout(async () => {
+        if (isClusteringRef.current) return;
+        isClusteringRef.current = true;
+        try {
+          console.log('🧠 Triggering face clustering (debounced)...');
+          await facesAPI.clusterFaces(userId);
+          console.log('✅ Face clustering complete');
+        } catch (err: any) {
+          console.warn('⚠️ Failed to run clustering:', err?.message || String(err));
+        } finally {
+          isClusteringRef.current = false;
+        }
+      }, 2000);
+    } catch {}
+  }, [userId]);
 
   const renderPhotoItem = ({ item, index }: ListRenderItemInfo<Photo>) => (
     <TouchableOpacity 
@@ -396,8 +468,12 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
         const faceResult = await facesAPI.detectAndStore(formData, photo.id, userId);
         faceCount = faceResult.faces?.length || 0;
         console.log('✅ Face detection completed | Faces found:', faceCount);
+        // Schedule debounced clustering to refresh People tab
+        scheduleClusterRefresh();
       } catch (faceError: any) {
         console.warn('⚠️ Face detection skipped:', faceError.message || faceError);
+        // Even if detection fails, still schedule clustering to keep state consistent
+        scheduleClusterRefresh();
       }
       
       Alert.alert(
@@ -461,7 +537,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Photos</Text>
+        <Text style={styles.headerTitle}>ImageNerve</Text>
         <View style={styles.headerTabs}>
           <TouchableOpacity onPress={() => setTab('photos')} style={[styles.headerTabBtn, tab==='photos' && styles.headerTabActive]}>
             <Text style={[styles.headerTabText, tab==='photos' && styles.headerTabTextActive]}>Photos</Text>
@@ -482,14 +558,33 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
       {/* Tabs */}
       {/* Removed top Photos/Albums toggle; now in header */}
 
-      {/* Below: Me/Everyone icon-only toggle */}
-      <View style={styles.scopeIconToggle}>
-        <TouchableOpacity onPress={() => setScope('mine')} style={[styles.scopeIconBtn, scope==='mine' && styles.scopeBtnActive]}>
-          <Text style={[styles.scopeIconText, scope==='mine' && styles.scopeTextActive]}>👤</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setScope('everyone')} style={[styles.scopeIconBtn, scope==='everyone' && styles.scopeBtnActive]}>
-          <Text style={[styles.scopeIconText, scope==='everyone' && styles.scopeTextActive]}>👥</Text>
-        </TouchableOpacity>
+      {/* Floating minimal Me/Everyone toggle (icons only) */}
+      <View style={styles.floatingScopeToggle}>
+        <View style={styles.scopeToggleWrapper}>
+          <BlurView intensity={25} tint="dark" style={StyleSheet.absoluteFillObject} />
+          <Animated.View
+            style={[
+              styles.scopeHighlight,
+              {
+                width: scopeToggleWidth / 2,
+                transform: [
+                  {
+                    translateX: segmentAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0, scopeToggleWidth / 2],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          />
+          <TouchableOpacity style={styles.scopeHalf} onPress={() => setScope('mine')} activeOpacity={0.9}>
+            <Ionicons name="person-outline" size={18} color={scope === 'mine' ? '#fff' : 'rgba(255,255,255,0.8)'} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.scopeHalf} onPress={() => setScope('everyone')} activeOpacity={0.9}>
+            <Ionicons name="people-outline" size={18} color={scope === 'everyone' ? '#fff' : 'rgba(255,255,255,0.8)'} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {loading ? (
@@ -512,7 +607,26 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
           getItemLayout={getItemLayout}
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}
-          contentContainerStyle={{ paddingBottom: 16, minHeight: 200 }}
+          inverted
+          contentContainerStyle={{ paddingTop: 0, paddingBottom: 0, minHeight: 0, backgroundColor: '#000' }}
+          ListHeaderComponent={
+            albums.length > 0 ? (
+              <View style={styles.albumsBar}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.albumsRow}>
+                  {albums.map((a) => (
+                    <AlbumCard
+                      key={a.id}
+                      title={a.name}
+                      count={albumCounts[a.id] ?? (a as any)?.photo_count ?? (a.photo_ids?.length || 0)}
+                      photos={albumPreviews[a.id] || []}
+                      userId={userId}
+                      onPress={() => setOpenAlbumId(a.id)}
+                    />
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
             showProfileFaceCta && scope === 'mine' ? (
               <View style={styles.emptyState}>
@@ -529,28 +643,8 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
               </View>
             )
           }
-          ListFooterComponent={
-            albums.length > 0 ? (
-              <View style={styles.albumsSection}>
-                <View style={styles.albumsHeader}>
-                  <Text style={styles.albumsTitle}>Albums</Text>
-                  <TouchableOpacity><Text style={styles.albumsModify}>Modify</Text></TouchableOpacity>
-                </View>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.albumsRow}>
-                  {albums.map((a) => (
-                  <AlbumCard
-                      key={a.id}
-                      title={a.name}
-                    count={albumCounts[a.id] ?? (a as any)?.photo_count ?? (a.photo_ids?.length || 0)}
-                      photos={albumPreviews[a.id] || []}
-                      userId={userId}
-                      onPress={() => setOpenAlbumId(a.id)}
-                    />
-                  ))}
-                </ScrollView>
-              </View>
-            ) : null
-          } 
+          onEndReachedThreshold={0.3}
+          onEndReached={loadMore}
         />
       ) : (
         <FlatList
@@ -568,7 +662,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
             />
           )}
           numColumns={2}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 120 }}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24 }}
         />
       )}
 
@@ -683,25 +777,9 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: '#000',
+    zIndex: 5,
   },
-  scopeToggle: {
-    flexDirection: 'row',
-    gap: 8,
-    position: 'absolute',
-    left: '50%',
-    transform: [{ translateX: -50 } as any],
-  },
-  scopeBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.1)'
-  },
-  scopeBtnActive: {
-    backgroundColor: 'rgba(255,255,255,0.25)'
-  },
-  scopeText: { color: 'rgba(255,255,255,0.75)' },
-  scopeTextActive: { color: '#fff', fontWeight: '700' },
   headerTitle: {
     fontSize: 24,
     fontWeight: '700',
@@ -751,21 +829,34 @@ const styles = StyleSheet.create({
   },
   headerTabText: { color: 'rgba(255,255,255,0.75)' },
   headerTabTextActive: { color: '#fff', fontWeight: '700' },
-  scopeIconToggle: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingBottom: 6,
-    gap: 8,
+  floatingScopeToggle: {
+    position: 'absolute',
+    right: 16,
+    top: 52,
+    zIndex: 10,
+    elevation: 10,
   },
-  scopeIconBtn: {
-    width: 36,
+  scopeToggleWrapper: {
+    width: 96,
     height: 36,
     borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    overflow: 'hidden',
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: 'rgba(0,0,0,0.35)'
   },
-  scopeIconText: { color: 'rgba(255,255,255,0.75)', fontSize: 16 },
+  scopeHighlight: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 18,
+  },
+  scopeHalf: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  scopeIconSmall: { color: 'rgba(255,255,255,0.85)', fontSize: 14 },
   tabBtn: {
     paddingHorizontal: 12,
     paddingVertical: 6,
@@ -787,13 +878,21 @@ const styles = StyleSheet.create({
     height: getPhotoItemWidth(),
     margin: 0,
     padding: 0,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
   albumsSection: { marginTop: 16 },
   albumsHeader: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 8 },
   albumsTitle: { color: '#fff', fontSize: 22, fontWeight: '700' },
   albumsModify: { color: '#0a84ff' },
-  albumsRow: { paddingHorizontal: 16, paddingBottom: 24 },
+  albumsRow: { paddingHorizontal: 16, paddingVertical: 10 },
   albumsGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, paddingTop: 8 },
+  albumsBar: {
+    marginTop: 10,
+    backgroundColor: '#000',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)'
+  },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',
@@ -839,7 +938,7 @@ const styles = StyleSheet.create({
   },
   floatingAddButton: {
     position: 'absolute',
-    bottom: 30,
+    bottom: 18,
     right: 20,
     width: 56,
     height: 56,

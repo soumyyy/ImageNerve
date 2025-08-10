@@ -1,11 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Dimensions, ActivityIndicator, Alert } from 'react-native';
-import { albumsAPI } from '../services/api';
+import { albumsAPI, photosAPI, facesAPI } from '../services/api';
 import { Photo } from '../types';
 import { PhotoImage } from '../components/PhotoImage';
 import { pickImage } from '../utils/imageUtils';
 import { getMimeType } from '../utils/fileUtils';
-import { photosAPI } from '../services/api';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -23,6 +22,28 @@ export const AlbumDetailsScreen: React.FC<AlbumDetailsScreenProps> = ({ albumId,
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+
+  // Debounce clustering similar to dashboard
+  const clusterDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const isClusteringRef = useRef<boolean>(false);
+  const scheduleClusterRefresh = useCallback(() => {
+    try {
+      if (clusterDebounceRef.current) clearTimeout(clusterDebounceRef.current);
+      clusterDebounceRef.current = setTimeout(async () => {
+        if (isClusteringRef.current) return;
+        isClusteringRef.current = true;
+        try {
+          console.log('🧠 Triggering face clustering (debounced) from AlbumDetails...');
+          await facesAPI.clusterFaces(userId);
+          console.log('✅ Face clustering complete');
+        } catch (err: any) {
+          console.warn('⚠️ Failed to run clustering:', err?.message || String(err));
+        } finally {
+          isClusteringRef.current = false;
+        }
+      }, 2000);
+    } catch {}
+  }, [userId]);
 
   useEffect(() => {
     (async () => {
@@ -78,6 +99,19 @@ export const AlbumDetailsScreen: React.FC<AlbumDetailsScreenProps> = ({ albumId,
         },
       } as any;
       const created = await photosAPI.createPhoto(photoData);
+
+      // Detect and store faces
+      try {
+        const formData = new FormData();
+        formData.append('file', blob, uploadUrlResponse.sanitizedFilename);
+        await facesAPI.detectAndStore(formData, created.id, userId);
+        // Debounced clustering
+        scheduleClusterRefresh();
+      } catch (faceErr: any) {
+        console.warn('Face detection failed/skipped:', faceErr?.message || String(faceErr));
+        scheduleClusterRefresh();
+      }
+
       setPhotos(prev => [created, ...prev]);
       Alert.alert('Success', 'Photo added to album');
     } catch (e: any) {

@@ -1,12 +1,9 @@
 import React, { useState } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
-  TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
 import { DashboardScreen } from './DashboardScreen';
 import { SettingsScreen } from './SettingsScreen';
 
@@ -15,7 +12,6 @@ export const MainScreen: React.FC = () => {
 
   const navigateToSettings = () => setCurrentScreen('settings');
   const navigateToDashboard = () => setCurrentScreen('dashboard');
-  // Shared overlay removed per new direction
 
   const renderMainContent = () => {
     switch (currentScreen) {
@@ -29,12 +25,8 @@ export const MainScreen: React.FC = () => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.mainContent}>
-        {renderMainContent()}
-      </View>
-
-      {/* Shared overlay removed */}
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <View style={styles.mainContent}>{renderMainContent()}</View>
     </SafeAreaView>
   );
 };
@@ -42,11 +34,10 @@ export const MainScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f3460',
+    backgroundColor: '#000',
   },
   mainContent: {
     flex: 1,
-    backgroundColor: '#0f3460',
+    backgroundColor: '#000',
   },
-  // removed shared overlay styles
 }); 

@@ -56,6 +56,12 @@ export const photosAPI = {
       sanitizedFilename  // Return sanitized name for later use
     };
   },
+  
+  getThumbnailUrl: (filename: string, width: number = 320, quality: number = 60) => {
+    const base = API_BASE_URL;
+    // Streamed thumbnail endpoint (no presign needed)
+    return `${base}/photos/thumb?filename=${encodeURIComponent(filename)}&w=${width}&q=${quality}`;
+  },
 
   createPhoto: async (photoData: {
     user_id: string;
@@ -106,17 +112,15 @@ export const photosAPI = {
     }
   },
 
-  getUserPhotos: async (userId: string) => {
+  getUserPhotos: async (userId: string, opts?: { limit?: number; before?: string }) => {
     try {
-      console.log('📤 Getting photos for user:', userId);
-      console.log('🔍 Making request to:', `${API_BASE_URL}/photos/?user_id=${userId}`);
-      
-      const response = await api.get(`/photos/?user_id=${userId}`);
-      console.log('📥 User photos response:', response.data);
+      const limit = opts?.limit ?? 50;
+      const before = opts?.before ? `&before=${encodeURIComponent(opts.before)}` : '';
+      const url = `/photos/?user_id=${userId}&limit=${limit}${before}`;
+      const response = await api.get(url);
       return response.data;
     } catch (error: any) {
       console.error('❌ Failed to get user photos:', {
-        url: `${API_BASE_URL}/photos/?user_id=${userId}`,
         error: error.message,
         code: error.code,
         response: error.response?.data,

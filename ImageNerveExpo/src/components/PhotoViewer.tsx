@@ -9,15 +9,18 @@ import {
   ScrollView,
   Alert,
   Platform,
+  PanResponder,
+  Easing,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import { photosAPI } from '../services/api';
 import { BlurView } from 'expo-blur';
-import { SafeAreaView } from 'react-native-safe-area-context';
+// Safe area removed for this viewer to avoid extra padding/margins
 import { Photo } from '../types';
 import { PhotoImage } from './PhotoImage';
+import { Ionicons } from '@expo/vector-icons';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -41,6 +44,8 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
   const slideAnim = useRef(new Animated.Value(0)).current;
   const metadataAnim = useRef(new Animated.Value(0)).current;
   const slideDirection = useRef<'left' | 'right' | null>(null);
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const [dockHeight, setDockHeight] = useState(0);
 
   // Update currentPhoto when currentIndex changes
   const currentPhoto = photos[currentIndex];
@@ -58,58 +63,94 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
     }
   }, [currentIndex]);
 
-  const handleSwipe = (direction: 'left' | 'right') => {
-    console.log('🔄 Swiping:', direction, 'Current index:', currentIndex, 'Total photos:', photos.length);
-    
+  // Header includes its own top spacing; dock includes bottom padding
+  const availablePhotoHeight = Math.max(0, screenHeight - headerHeight - dockHeight);
+  const sidePad = Platform.OS === 'web' ? Math.min(210, Math.round(screenWidth * 0.3)) : 0;
+  const imageWidth = Math.max(0, screenWidth - sidePad * 2);
+
+  const animateToIndex = (direction: 'left' | 'right') => {
     if (direction === 'left' && currentIndex < photos.length - 1) {
       const newIndex = currentIndex + 1;
-      console.log('➡️ Moving to next photo:', newIndex);
-      
-      // Set slide direction for animation
       slideDirection.current = 'left';
-      
-      // Animate slide out
       Animated.timing(slideAnim, {
         toValue: -screenWidth,
-        duration: 300,
+        duration: 240,
+        easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }).start(() => {
         setCurrentIndex(newIndex);
-        // Reset slide position
         slideAnim.setValue(screenWidth);
-        // Animate slide in
         Animated.timing(slideAnim, {
           toValue: 0,
-          duration: 300,
+          duration: 240,
+          easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }).start();
       });
-      
     } else if (direction === 'right' && currentIndex > 0) {
       const newIndex = currentIndex - 1;
-      console.log('⬅️ Moving to previous photo:', newIndex);
-      
-      // Set slide direction for animation
       slideDirection.current = 'right';
-      
-      // Animate slide out
       Animated.timing(slideAnim, {
         toValue: screenWidth,
-        duration: 300,
+        duration: 240,
+        easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }).start(() => {
         setCurrentIndex(newIndex);
-        // Reset slide position
         slideAnim.setValue(-screenWidth);
-        // Animate slide in
         Animated.timing(slideAnim, {
           toValue: 0,
-          duration: 300,
+          duration: 240,
+          easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }).start();
       });
+    } else {
+      Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true }).start();
     }
   };
+
+  const handleSwipe = (direction: 'left' | 'right') => {
+    console.log('🔄 Swiping:', direction, 'Current index:', currentIndex, 'Total photos:', photos.length);
+    animateToIndex(direction);
+  };
+
+  // Gesture handling for swipe navigation (velocity + distance)
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        if (showMetadata) return false;
+        const dx = Math.abs(gestureState.dx);
+        const dy = Math.abs(gestureState.dy);
+        return dx > 8 && dx > dy * 1.2; // horizontal intent
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (showMetadata) return;
+        const dx = gestureState.dx;
+        // Allow following finger; resist if no prev/next
+        const limitLeft = prevPhoto ? screenWidth : screenWidth * 0.12;
+        const limitRight = nextPhoto ? -screenWidth : -screenWidth * 0.12;
+        slideAnim.setValue(Math.max(limitRight, Math.min(dx, limitLeft)));
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (showMetadata) return;
+        const dx = gestureState.dx;
+        const vx = gestureState.vx;
+        const distancePass = Math.abs(dx) > screenWidth * 0.12;
+        const velocityPass = Math.abs(vx) > 0.25;
+        if ((dx < 0 && (distancePass || vx < -0.25)) && nextPhoto) {
+          animateToIndex('left');
+        } else if ((dx > 0 && (distancePass || vx > 0.25)) && prevPhoto) {
+          animateToIndex('right');
+        } else {
+          Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true }).start();
+      },
+    })
+  ).current;
 
   const toggleMetadata = () => {
     const toValue = showMetadata ? 0 : 1;
@@ -238,61 +279,27 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
   const extractImageMetadata = (photo: Photo) => {
     const metadata = photo.photo_metadata || {};
     const extracted = {
-      // Basic Info
+      // Basic
       filename: photo.filename,
       uploadedAt: photo.uploaded_at,
-      description: photo.description,
-      isPublic: photo.is_public,
-      tags: photo.tags || [],
-      location: photo.location,
-      
-      // Image Metadata (from photo_metadata)
       dimensions: metadata.dimensions || 'Unknown',
       fileSize: metadata.file_size || 'Unknown',
       format: metadata.format || 'Unknown',
-      colorSpace: metadata.color_space || 'Unknown',
-      dpi: metadata.dpi || 'Unknown',
-      
-      // Camera Info
-      camera: metadata.camera || 'Unknown',
-      lens: metadata.lens || 'Unknown',
-      focalLength: metadata.focal_length || 'Unknown',
-      aperture: metadata.aperture || 'Unknown',
-      shutterSpeed: metadata.shutter_speed || 'Unknown',
-      iso: metadata.iso || 'Unknown',
-      
-      // GPS Info
-      gpsLatitude: metadata.gps_latitude || 'Unknown',
-      gpsLongitude: metadata.gps_longitude || 'Unknown',
-      gpsAltitude: metadata.gps_altitude || 'Unknown',
-      
-      // Additional Info
-      software: metadata.software || 'Unknown',
-      artist: metadata.artist || 'Unknown',
-      copyright: metadata.copyright || 'Unknown',
-      orientation: metadata.orientation || 'Unknown',
-      
-      // Upload Info
-      uploadedFrom: metadata.uploaded_from || 'Unknown',
-      uploadTimestamp: metadata.upload_timestamp || 'Unknown',
-      
-      // Custom fields
-      customFields: Object.keys(metadata).filter(key => 
-        !['dimensions', 'file_size', 'format', 'color_space', 'dpi', 
-          'camera', 'lens', 'focal_length', 'aperture', 'shutter_speed', 'iso',
-          'gps_latitude', 'gps_longitude', 'gps_altitude', 'software', 'artist', 
-          'copyright', 'orientation', 'uploaded_from', 'upload_timestamp'].includes(key)
-      ).map(key => ({ key, value: metadata[key] }))
+      location: photo.location,
+      tags: photo.tags || [],
     };
     
-    return extracted;
+    return extracted as any;
   };
 
   return (
     <View style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
+      <View style={styles.safeArea}>
         {/* Header */}
-        <View style={styles.header}>
+        <View
+          style={styles.headerAbs}
+          onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
+        >
           <TouchableOpacity onPress={onClose} style={styles.closeButton}>
             <Text style={styles.closeButtonText}>×</Text>
           </TouchableOpacity>
@@ -302,15 +309,26 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
           <View style={styles.headerSpacer} />
         </View>
 
+        {/* Spacer below fixed header */}
+        <View style={{ height: headerHeight }} />
+
         {/* Photo Display */}
-        <View style={styles.photoContainer}>
+        <View style={styles.photoContainer} {...panResponder.panHandlers}>
+          {/* Edge tap zones */}
+          {currentIndex > 0 && (
+            <TouchableOpacity style={styles.edgeTapLeft} activeOpacity={0.8} onPress={() => handleSwipe('right')} />
+          )}
+          {currentIndex < photos.length - 1 && (
+            <TouchableOpacity style={styles.edgeTapRight} activeOpacity={0.8} onPress={() => handleSwipe('left')} />
+          )}
+
           {/* Preloaded Previous Photo (hidden) */}
           {prevPhoto && (
-            <View style={[styles.preloadedPhoto, { left: -screenWidth }]}>
+            <View style={[styles.preloadedPhoto, { left: -screenWidth }]}> 
               <PhotoImage 
                 photo={prevPhoto} 
                 userId={userId}
-                style={styles.fullPhoto}
+                style={[styles.fullPhoto, { height: availablePhotoHeight, width: imageWidth, alignSelf: 'center' }]}
               />
             </View>
           )}
@@ -322,84 +340,45 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
             <PhotoImage 
               photo={currentPhoto} 
               userId={userId}
-              style={styles.fullPhoto}
+              style={[styles.fullPhoto, { height: availablePhotoHeight, width: imageWidth, alignSelf: 'center' }]}
             />
           </Animated.View>
           
           {/* Preloaded Next Photo (hidden) */}
           {nextPhoto && (
-            <View style={[styles.preloadedPhoto, { right: -screenWidth }]}>
+            <View style={[styles.preloadedPhoto, { right: -screenWidth }]}> 
               <PhotoImage 
                 photo={nextPhoto} 
                 userId={userId}
-                style={styles.fullPhoto}
+                style={[styles.fullPhoto, { height: availablePhotoHeight, width: imageWidth, alignSelf: 'center' }]}
               />
             </View>
           )}
         </View>
 
-        {/* Liquid Glass Dock */}
+        {/* Glass Dock with actions */}
         <View style={styles.dockWrapper} pointerEvents="box-none">
-          <View style={styles.dock} pointerEvents="box-none">
-            <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFillObject as any} pointerEvents="none" />
+          <View
+            style={[styles.dock, { paddingBottom: 0 }]}
+            pointerEvents="auto"
+            onLayout={(e) => setDockHeight(e.nativeEvent.layout.height)}
+          >
+            <BlurView intensity={25} tint="dark" style={StyleSheet.absoluteFillObject as any} pointerEvents="none" />
             <View style={styles.dockContent}>
-            {/* Navigation */}
-            <View style={styles.dockLeft}>
-              {currentIndex > 0 && (
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  style={styles.dockButton}
-                  onPress={() => handleSwipe('right')}
-                >
-                  <Text style={styles.dockButtonText}>‹</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Center Actions */}
-            <View style={styles.dockCenter}>
-              <TouchableOpacity 
-                accessibilityRole="button"
-                style={styles.dockButton}
-                onPress={toggleMetadata}
-              >
-                <Text style={styles.dockButtonText}>i</Text>
+              <TouchableOpacity accessibilityRole="button" style={styles.dockButton} onPress={handleDelete}>
+                <Ionicons name="trash-outline" size={24} color="#0A84FF" />
               </TouchableOpacity>
-              
-              <TouchableOpacity 
-                accessibilityRole="button"
-                style={styles.dockButton}
-                onPress={() => handleDownload()}
-              >
-                <Text style={styles.dockButtonText}>↓</Text>
+              <TouchableOpacity accessibilityRole="button" style={styles.dockButton} onPress={toggleMetadata}>
+                <Ionicons name="information-circle-outline" size={24} color="#0A84FF" />
               </TouchableOpacity>
-              
-              <TouchableOpacity 
-                accessibilityRole="button"
-                style={styles.dockButton}
-                onPress={() => handleDelete()}
-              >
-                <Text style={styles.dockButtonText}>×</Text>
+              <TouchableOpacity accessibilityRole="button" style={styles.dockButton} onPress={handleDownload}>
+                <Ionicons name="download-outline" size={24} color="#0A84FF" />
               </TouchableOpacity>
-            </View>
-
-            {/* Navigation */}
-            <View style={styles.dockRight}>
-              {currentIndex < photos.length - 1 && (
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  style={styles.dockButton}
-                  onPress={() => handleSwipe('left')}
-                >
-                  <Text style={styles.dockButtonText}>›</Text>
-                </TouchableOpacity>
-              )}
-            </View>
             </View>
           </View>
         </View>
 
-        {/* Metadata Panel */}
+        {/* Metadata Panel (minimal glass) */}
         <Animated.View
           pointerEvents={showMetadata ? 'auto' : 'none'}
           style={[
@@ -417,209 +396,50 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
             },
           ]}
         >
+          <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFillObject as any} />
           <View style={styles.metadataContent}>
             <View style={styles.metadataHeader}>
-              <Text style={styles.metadataTitle}>Photo Details</Text>
+              <View style={styles.metadataHandle} />
+              <Text style={styles.metadataTitle}>Info</Text>
               <TouchableOpacity onPress={toggleMetadata}>
-                <Text style={styles.closeMetadataText}>×</Text>
+                <Ionicons name="close" size={20} color="#fff" />
               </TouchableOpacity>
             </View>
-            
             <ScrollView style={styles.metadataScroll}>
               {(() => {
-                const metadata = extractImageMetadata(currentPhoto);
-                
+                const m: any = extractImageMetadata(currentPhoto);
                 return (
                   <>
-                    {/* Basic Information */}
-                    <View style={styles.metadataSection}>
-                      <Text style={styles.metadataSectionTitle}>Basic Information</Text>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Filename</Text>
-                        <Text style={styles.metadataValue}>{metadata.filename}</Text>
+                    <View style={styles.metadataRow}>
+                      <Text style={styles.metadataKey}>Date</Text>
+                      <Text style={styles.metadataVal}>{formatDate(m.uploadedAt)}</Text>
+                    </View>
+                    <View style={styles.metadataRow}>
+                      <Text style={styles.metadataKey}>Filename</Text>
+                      <Text style={styles.metadataVal}>{m.filename}</Text>
+                    </View>
+                    <View style={styles.metadataRow}>
+                      <Text style={styles.metadataKey}>Size</Text>
+                      <Text style={styles.metadataVal}>{m.fileSize}</Text>
+                    </View>
+                    <View style={styles.metadataRow}>
+                      <Text style={styles.metadataKey}>Dimensions</Text>
+                      <Text style={styles.metadataVal}>{m.dimensions}</Text>
+                    </View>
+                    {m.location && (
+                      <View style={styles.metadataRow}>
+                        <Text style={styles.metadataKey}>Location</Text>
+                        <Text style={styles.metadataVal}>{formatLocation(m.location)}</Text>
                       </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Uploaded</Text>
-                        <Text style={styles.metadataValue}>
-                          {formatDate(metadata.uploadedAt)}
-                        </Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Description</Text>
-                        <Text style={styles.metadataValue}>
-                          {metadata.description || 'No description'}
-                        </Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Public</Text>
-                        <Text style={styles.metadataValue}>
-                          {metadata.isPublic ? 'Yes' : 'No'}
-                        </Text>
-                      </View>
-                      
-                      {metadata.tags.length > 0 && (
-                        <View style={styles.metadataItem}>
-                          <Text style={styles.metadataLabel}>Tags</Text>
-                          <Text style={styles.metadataValue}>
-                            {metadata.tags.join(', ')}
-                          </Text>
+                    )}
+                    {Array.isArray(m.tags) && m.tags.length > 0 && (
+                      <View style={[styles.metadataRow, { alignItems: 'flex-start' }]}>
+                        <Text style={styles.metadataKey}>Tags</Text>
+                        <View style={styles.tagRow}>
+                          {m.tags.map((t: string, i: number) => (
+                            <View key={`${t}_${i}`} style={styles.tagChip}><Text style={styles.tagText}>{t}</Text></View>
+                          ))}
                         </View>
-                      )}
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Location</Text>
-                        <Text style={styles.metadataValue}>
-                          {formatLocation(metadata.location)}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {/* Image Information */}
-                    <View style={styles.metadataSection}>
-                      <Text style={styles.metadataSectionTitle}>Image Information</Text>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Dimensions</Text>
-                        <Text style={styles.metadataValue}>{metadata.dimensions}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>File Size</Text>
-                        <Text style={styles.metadataValue}>{metadata.fileSize}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Format</Text>
-                        <Text style={styles.metadataValue}>{metadata.format}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Color Space</Text>
-                        <Text style={styles.metadataValue}>{metadata.colorSpace}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>DPI</Text>
-                        <Text style={styles.metadataValue}>{metadata.dpi}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Orientation</Text>
-                        <Text style={styles.metadataValue}>{metadata.orientation}</Text>
-                      </View>
-                    </View>
-
-                    {/* Camera Information */}
-                    <View style={styles.metadataSection}>
-                      <Text style={styles.metadataSectionTitle}>Camera Information</Text>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Camera</Text>
-                        <Text style={styles.metadataValue}>{metadata.camera}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Lens</Text>
-                        <Text style={styles.metadataValue}>{metadata.lens}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Focal Length</Text>
-                        <Text style={styles.metadataValue}>{metadata.focalLength}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Aperture</Text>
-                        <Text style={styles.metadataValue}>{metadata.aperture}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Shutter Speed</Text>
-                        <Text style={styles.metadataValue}>{metadata.shutterSpeed}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>ISO</Text>
-                        <Text style={styles.metadataValue}>{metadata.iso}</Text>
-                      </View>
-                    </View>
-
-                    {/* GPS Information */}
-                    <View style={styles.metadataSection}>
-                      <Text style={styles.metadataSectionTitle}>Location Data</Text>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Latitude</Text>
-                        <Text style={styles.metadataValue}>{metadata.gpsLatitude}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Longitude</Text>
-                        <Text style={styles.metadataValue}>{metadata.gpsLongitude}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Altitude</Text>
-                        <Text style={styles.metadataValue}>{metadata.gpsAltitude}</Text>
-                      </View>
-                    </View>
-
-                    {/* Upload Information */}
-                    <View style={styles.metadataSection}>
-                      <Text style={styles.metadataSectionTitle}>Upload Information</Text>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Uploaded From</Text>
-                        <Text style={styles.metadataValue}>{metadata.uploadedFrom}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Upload Timestamp</Text>
-                        <Text style={styles.metadataValue}>
-                          {metadata.uploadTimestamp !== 'Unknown' 
-                            ? formatDate(metadata.uploadTimestamp)
-                            : 'Unknown'
-                          }
-                        </Text>
-                      </View>
-                    </View>
-
-                    {/* Additional Information */}
-                    <View style={styles.metadataSection}>
-                      <Text style={styles.metadataSectionTitle}>Additional Information</Text>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Software</Text>
-                        <Text style={styles.metadataValue}>{metadata.software}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Artist</Text>
-                        <Text style={styles.metadataValue}>{metadata.artist}</Text>
-                      </View>
-                      
-                      <View style={styles.metadataItem}>
-                        <Text style={styles.metadataLabel}>Copyright</Text>
-                        <Text style={styles.metadataValue}>{metadata.copyright}</Text>
-                      </View>
-                    </View>
-
-                    {/* Custom Fields */}
-                    {metadata.customFields.length > 0 && (
-                      <View style={styles.metadataSection}>
-                        <Text style={styles.metadataSectionTitle}>Custom Fields</Text>
-                        {metadata.customFields.map((field, index) => (
-                          <View key={index} style={styles.metadataItem}>
-                            <Text style={styles.metadataLabel}>{field.key}</Text>
-                            <Text style={styles.metadataValue}>
-                              {typeof field.value === 'object' ? JSON.stringify(field.value) : String(field.value)}
-                            </Text>
-                          </View>
-                        ))}
                       </View>
                     )}
                   </>
@@ -628,7 +448,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
             </ScrollView>
           </View>
         </Animated.View>
-      </SafeAreaView>
+      </View>
     </View>
   );
 };
@@ -641,34 +461,38 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
-  header: {
+  headerAbs: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    zIndex: 5,
   },
   closeButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   closeButtonText: {
     color: '#ffffff',
-    fontSize: 18,
+    fontSize: 13,
     fontWeight: '600',
   },
   headerTitle: {
     color: '#ffffff',
-    fontSize: 16,
+    fontSize: 12,
     fontWeight: '600',
   },
   headerSpacer: {
-    width: 32,
+    width: 22,
   },
   photoContainer: {
     flex: 1,
@@ -679,136 +503,112 @@ const styles = StyleSheet.create({
   },
   fullPhoto: {
     width: screenWidth,
-    height: screenHeight * 0.7,
+    height: screenHeight * 0.86,
     resizeMode: 'contain',
-  },
-  navButton: {
-    position: 'absolute',
-    top: '50%',
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  leftButton: {
-    left: 20,
-  },
-  rightButton: {
-    right: 20,
-  },
-  navButtonText: {
-    color: '#ffffff',
-    fontSize: 24,
-    fontWeight: '600',
-  },
-  metadataPanel: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.95)',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: screenHeight * 0.6,
-  },
-  metadataContent: {
-    padding: 20,
-  },
-  metadataHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  metadataTitle: {
-    color: '#ffffff',
-    fontSize: 20,
-    fontWeight: '600',
-  },
-  closeMetadataText: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  metadataScroll: {
-    maxHeight: screenHeight * 0.4,
-  },
-  metadataItem: {
-    marginBottom: 16,
-  },
-  metadataLabel: {
-    color: 'rgba(255, 255, 255, 0.6)',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  metadataValue: {
-    color: '#ffffff',
-    fontSize: 16,
-  },
-  metadataSection: {
-    marginBottom: 24,
-  },
-  metadataSectionTitle: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.2)',
-    paddingBottom: 8,
-  },
-  dock: {
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingBottom: 30,
-    paddingTop: 20,
-  },
-  dockWrapper: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingBottom: 0,
-  },
-  dockContent: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  dockLeft: {
-    flex: 1,
-    alignItems: 'flex-start',
-  },
-  dockCenter: {
-    flex: 2,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-  },
-  dockRight: {
-    flex: 1,
-    alignItems: 'flex-end',
-  },
-  dockButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginHorizontal: 5,
-  },
-  dockButtonText: {
-    fontSize: 20,
-    color: '#ffffff',
   },
   preloadedPhoto: {
     position: 'absolute',
     top: 0,
     width: screenWidth,
     height: '100%',
+  },
+  edgeTapLeft: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: screenWidth * 0.25,
+    zIndex: 5,
+  },
+  edgeTapRight: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: screenWidth * 0.25,
+    zIndex: 5,
+  },
+  metadataPanel: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'transparent',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: screenHeight * 0.6,
+  },
+  metadataContent: {
+    padding: 16,
+  },
+  metadataHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  metadataHandle: {
+    position: 'absolute',
+    top: -6,
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.25)'
+  },
+  metadataTitle: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  metadataScroll: {
+    maxHeight: screenHeight * 0.45,
+  },
+  metadataRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.12)'
+  },
+  metadataKey: { color: 'rgba(255,255,255,0.6)', fontSize: 13 },
+  metadataVal: { color: '#fff', fontSize: 14, maxWidth: '55%', textAlign: 'right' },
+  tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' },
+  tagChip: { backgroundColor: 'rgba(255,255,255,0.12)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 },
+  tagText: { color: '#fff', fontSize: 12 },
+  dock: {
+    alignSelf: 'center',
+    width: 280,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.16)',
+    overflow: 'hidden',
+    backgroundColor: 'rgba(0,0,0,0.35)'
+  },
+  dockWrapper: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 12,
+    alignItems: 'center',
+  },
+  dockContent: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
+  dockButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'transparent',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: 0,
   },
 }); 

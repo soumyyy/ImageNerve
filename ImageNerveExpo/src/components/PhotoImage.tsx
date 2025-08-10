@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Animated } from 'react-native';
+import { View, Text, StyleSheet, Animated, Platform } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { Photo } from '../types';
 import { photosAPI } from '../services/api';
@@ -15,53 +15,47 @@ export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId, style }) 
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
   const fadeAnim = useState(new Animated.Value(0))[0];
+  const thumbFade = useState(new Animated.Value(0))[0];
   
   useEffect(() => {
-    console.log('🖼️ PhotoImage component mounted for:', photo.filename);
-    console.log('📋 Photo data:', photo);
-    
-    // Reset states when photo changes
     setHasError(false);
     setIsLoading(true);
     setImageUrl(null);
+    setThumbUrl(null);
     fadeAnim.setValue(0);
-    
-    loadImageUrl();
-  }, [photo.id]); // Re-run when photo.id changes
+    thumbFade.setValue(0);
+    loadUrls();
+  }, [photo.id]);
 
-  const loadImageUrl = async () => {
+  const loadUrls = async () => {
     try {
-      console.log('🔗 Loading URL for:', photo.filename);
-      console.log('📋 Photo s3_url:', photo.s3_url);
-      
-      // Always use presigned URL for better access control
-      console.log('🔐 Getting presigned URL for:', photo.filename);
+      // Low-res thumbnail first
+      const thumb = photosAPI.getThumbnailUrl(photo.filename, 320, 60);
+      setThumbUrl(thumb);
+      Animated.timing(thumbFade, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+
+      // Full-res presigned
       const downloadResponse = await photosAPI.getDownloadUrl(photo.filename, userId);
-      console.log('✅ Presigned URL received:', downloadResponse.url);
       setImageUrl(downloadResponse.url);
     } catch (error) {
-      console.log('❌ Presigned URL failed for:', photo.filename, error);
       setHasError(true);
       setIsLoading(false);
     }
   };
 
-  const handleImageError = (error: any) => {
-    console.log('Image failed to load:', photo.filename, error.nativeEvent?.error || 'Unknown error');
+  const handleImageError = (_error: any) => {
     setIsLoading(false);
     setHasError(true);
   };
 
   const handleImageLoad = () => {
-    console.log('Image loaded successfully:', photo.filename);
     setIsLoading(false);
     setHasError(false);
-    
-    // Fade in animation
     Animated.timing(fadeAnim, {
       toValue: 1,
-      duration: 450,
+      duration: 300,
       useNativeDriver: true,
     }).start();
   };
@@ -77,33 +71,39 @@ export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId, style }) 
     );
   }
 
-  if (!imageUrl) {
-    return (
-      <View style={styles.photoImageContainer}>
-        <Shimmer style={styles.photoLoading} />
-      </View>
-    );
-  }
-
   return (
     <View style={styles.photoImageContainer}>
-      {isLoading && (
-        <Animated.View style={{ position: 'absolute', zIndex: 1, width: '100%', height: '100%', opacity: fadeAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) }}>
-          <Shimmer style={styles.photoLoading} />
+      {/* Thumbnail Layer */}
+      {thumbUrl && (
+        <Animated.View style={[styles.imageContainer, { opacity: thumbFade }]}>        
+          <ExpoImage
+            source={{ uri: thumbUrl }}
+            style={[styles.photoImage, style]}
+            contentFit={style ? 'contain' : 'cover'}
+            cachePolicy="memory-disk"
+            recyclingKey={`${photo.id}-thumb`}
+            transition={100}
+          />
         </Animated.View>
       )}
-      <Animated.View style={[styles.imageContainer, { opacity: fadeAnim }]}>        
-        <ExpoImage
-          source={{ uri: imageUrl }}
-          style={[styles.photoImage, style]}
-          onError={handleImageError}
-          onLoad={handleImageLoad as any}
-          contentFit={style ? 'contain' : 'cover'}
-          transition={200}
-          cachePolicy="memory-disk"
-          recyclingKey={photo.id}
-        />
-      </Animated.View>
+
+      {/* Full-res Layer */}
+      {imageUrl ? (
+        <Animated.View style={[styles.imageContainer, { opacity: fadeAnim }]}>        
+          <ExpoImage
+            source={{ uri: imageUrl }}
+            style={[styles.photoImage, style]}
+            onError={handleImageError}
+            onLoad={handleImageLoad as any}
+            contentFit={style ? 'contain' : 'cover'}
+            transition={200}
+            cachePolicy="memory-disk"
+            recyclingKey={photo.id}
+          />
+        </Animated.View>
+      ) : (
+        <Shimmer style={styles.photoLoading} />
+      )}
     </View>
   );
 };

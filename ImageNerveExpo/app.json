@@ -19,7 +19,8 @@
         "NSPhotoLibraryAddUsageDescription": "Allow ImageNerve to save photos to your library.",
         "UIApplicationSupportsIndirectInputEvents": true,
         "NSCameraUsageDescription": "Allow ImageNerve to use your camera to capture your face profile."
-      }
+      },
+      "bundleIdentifier": "com.anonymous.ImageNerveExpo"
     },
     "android": {
       "adaptiveIcon": {
@@ -27,11 +28,22 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": ["READ_MEDIA_IMAGES", "CAMERA"]
+      "permissions": [
+        "READ_MEDIA_IMAGES",
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "CAMERA"
+      ],
+      "package": "com.anonymous.ImageNerveExpo"
     },
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "bfb1d2fc-244b-4400-bbc3-7d6ced8474c0"
+      }
     }
   }
 }
