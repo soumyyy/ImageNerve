@@ -115,7 +115,11 @@ class FaceService:
 
     def get_clusters_by_user(self, user_id: str) -> List[FaceCluster]:
         """Get all face clusters for a user."""
-        return self.db.query(FaceCluster).filter(FaceCluster.user_id == uuid.UUID(user_id)).all()
+        try:
+            user_uuid = uuid.UUID(user_id)
+        except ValueError:
+            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
+        return self.db.query(FaceCluster).filter(FaceCluster.user_id == user_uuid).all()
 
     def get_cluster_by_id(self, cluster_id: str) -> Optional[FaceCluster]:
         """Get a specific face cluster by ID."""

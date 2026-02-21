@@ -1,12 +1,12 @@
-# # 📸 ImageNerve - AI-Powered Photo Management
+# # ImageNerve - AI-Powered Photo Management
 
 A full-stack photo management application with AI-powered face recognition, built with React Native (Expo) and FastAPI.
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 image_nerve_app/
-├── 📱 ImageNerveExpo/          # React Native Frontend (Expo)
+├── ImageNerveExpo/          # React Native Frontend (Expo)
 │   ├── src/
 │   │   ├── components/         # Reusable UI components
 │   │   ├── screens/           # Screen components
@@ -23,6 +23,7 @@ image_nerve_app/
 │   │   ├── routes/           # API endpoints
 │   │   ├── services/         # Business logic
 │   │   ├── models/           # Database models
+│   │   ├── auth/            # Current user / test user (single place for identity)
 │   │   ├── face_engine/      # AI face detection
 │   │   ├── utils/            # Utilities & logging
 │   │   └── main.py          # FastAPI app
@@ -34,7 +35,7 @@ image_nerve_app/
 └── 📖 README.md              # This file
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Frontend (React Native)
 ```bash
@@ -49,8 +50,20 @@ cd backend
 pip install -r requirements.txt
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
+for startup
+```bash
+cd backend && source .venv/bin/activate && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-## ✨ Features
+## Auth & user (test user)
+
+Identity is centralized so real auth can be added later without scattering changes:
+
+- **Backend:** `app/auth/` defines `TEST_USER_ID` and `get_current_user_id(request)`. User is resolved from query `user_id`, header `X-User-Id`, or the test user. Photo service ensures the test user exists in the DB when needed; request logging uses the resolved user.
+- **Frontend:** `src/config/user.ts` exports `CURRENT_USER_ID` and `getCurrentUserId()`. All screens and API calls use this; no hardcoded user ids elsewhere.
+- To switch to real auth: replace `get_current_user_id` (e.g. with JWT) and the frontend config (e.g. with an auth context) in these two places.
+
+## Features
 
 - 📸 **Photo Upload & Management** - Seamless photo uploads to AWS S3
 - 🤖 **AI Face Recognition** - Powered by InsightFace
@@ -64,7 +77,8 @@ python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ## 🛠️ Tech Stack
 
 **Frontend:**
-- React Native (Expo)
+- React Native with Expo SDK 54
+- React 19.1 / React Native 0.81
 - TypeScript
 - React Navigation
 - Axios for API calls
@@ -79,7 +93,7 @@ python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 **Infrastructure:**
 - AWS S3 for file storage
 - Supabase for database
-- Comprehensive logging system
+- Comprehensive logging 
 
 ## 📖 Documentation
 

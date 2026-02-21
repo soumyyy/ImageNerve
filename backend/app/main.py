@@ -1,6 +1,8 @@
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+
 from app.api.api_router import apiRouter
+from app.auth import get_current_user_id
 from app.utils.logger import setup_logging, get_logger, log_api_request
 import time
 import os
@@ -24,8 +26,8 @@ async def root():
 async def log_requests(request: Request, call_next):
     start_time = time.time()
     
-    # Extract user_id from query params if available
-    user_id = request.query_params.get("user_id", "unknown")
+    # Resolve user for logging (query, X-User-Id header, or test user)
+    user_id = get_current_user_id(request)
     
     response = await call_next(request)
     

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { getCurrentUserId } from '../config/user';
 import { photosAPI, facesAPI } from '../services/api';
 import FaceProfileWizard from '../components/FaceProfileWizard';
 
@@ -32,7 +33,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
 
   const loadUserStats = async () => {
     try {
-      const userId = 'test-user-001';
+      const userId = getCurrentUserId();
       const photos = await photosAPI.getUserPhotos(userId);
       
       // Calculate total size (assuming average 2MB per photo)
@@ -50,7 +51,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
 
   const loadProfileStatus = async () => {
     try {
-      const userId = 'test-user-001';
+      const userId = getCurrentUserId();
       const status = await facesAPI.getProfileStatus(userId);
       setProfileStatus(status);
     } catch (error) {
@@ -240,7 +241,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
       </ScrollView>
       <FaceProfileWizard
         visible={showWizard}
-        userId={'test-user-001'}
+        userId={getCurrentUserId()}
         onClose={() => setShowWizard(false)}
         onSaved={handleProfileSaved}
       />

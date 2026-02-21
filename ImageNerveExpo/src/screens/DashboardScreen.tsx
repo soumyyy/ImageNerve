@@ -7,6 +7,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { pickImage } from '../utils/imageUtils';
 import { getMimeType } from '../utils/fileUtils';
+import { getCurrentUserId } from '../config/user';
 import { photosAPI, facesAPI, albumsAPI } from '../services/api';
 import { Photo, Album } from '../types';
 import { PhotoImage } from '../components/PhotoImage';
@@ -57,8 +58,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const [cursorBefore, setCursorBefore] = useState<string | null>(null);
   const [isPaginating, setIsPaginating] = useState(false);
   
-  // Test user ID for development
-  const userId = 'test-user-001';
+  const userId = getCurrentUserId();
 
   useEffect(() => {
     loadUserData();
@@ -75,7 +75,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const testAPIConnection = async () => {
     try {
       console.log('Testing API connection...');
-      const response = await fetch('http://127.0.0.1:8000/photos/?user_id=test-user-001');
+      const response = await fetch(`http://127.0.0.1:8000/photos/?user_id=${userId}`);
       const data = await response.json();
       console.log('API test successful:', data);
     } catch (error) {

@@ -45,11 +45,26 @@ def _resolve_database_url() -> str:
         db_url = f"{db_url}{separator}sslmode=require"
         logger.info("🔐 Enforcing sslmode=require for Supabase connection")
 
-    # Helpful diagnostics for pooled connections
+    # Helpful diagnostics and validation
     try:
         parsed = urlparse(db_url)
-        hostname = parsed.hostname or ""
+        hostname = (parsed.hostname or "").strip()
         username = (parsed.username or "")
+        password = parsed.password
+        if "@" in hostname:
+            raise RuntimeError(
+                "Database URL is malformed: hostname contains '@' (got %r). "
+                "This usually means a space after the colon in postgres:PASSWORD. "
+                "Use no space: postgresql://postgres:YOUR_PASSWORD@db.xxx.supabase.co:5432/postgres"
+                % (hostname,)
+            )
+        if "supabase.co" in hostname and not password:
+            raise RuntimeError(
+                "Database URL has no password. Supabase requires a password. "
+                "In .env set SUPABASE_URL (or DATABASE_URL) to the full connection string, e.g.:\n"
+                "  postgresql://postgres:YOUR_DATABASE_PASSWORD@db.xxxx.supabase.co:5432/postgres?sslmode=require\n"
+                "Get the password from Supabase: Project Settings → Database → Connection string (URI)."
+            )
         if "pooler.supabase.com" in hostname and "." not in username:
             logger.warning(
                 "⚠️ Supabase pooled host detected (%s) but username '%s' has no project ref.\n"
@@ -57,6 +72,8 @@ def _resolve_database_url() -> str:
                 hostname,
                 username,
             )
+    except RuntimeError:
+        raise
     except Exception:
         # Non-fatal; continue
         pass
@@ -64,18 +81,28 @@ def _resolve_database_url() -> str:
     return db_url
 
 
-DATABASE_URL = _resolve_database_url()
+_database_url = None
+_engine = None
+_SessionLocal = None
 
-engine = create_engine(
-    DATABASE_URL,
-    poolclass=NullPool,  # Good for scripts and dev; use a real pool in prod
-    pool_pre_ping=True,
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def _get_engine():
+    global _engine, _SessionLocal, _database_url
+    if _engine is None:
+        _database_url = _resolve_database_url()
+        _engine = create_engine(
+            _database_url,
+            poolclass=NullPool,
+            pool_pre_ping=True,
+        )
+        _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
+    return _engine
 
 
 def get_db():
-    db = SessionLocal()
+    if _SessionLocal is None:
+        _get_engine()
+    db = _SessionLocal()
     try:
         yield db
     finally:

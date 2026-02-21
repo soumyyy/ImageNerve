@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy.orm import Session, load_only
+from app.auth import TEST_USER_ID
 from app.models.database_models import Photo, User, Album, FaceEmbedding
 from app.services import s3_service
 from app.services.album_service import AlbumService
@@ -37,7 +38,7 @@ class PhotoService:
                 self.logger.debug(f"🔄 Generated UUID from string: {user_id} -> {user_uuid}")
             
             # Ensure test user exists (for development)
-            if user_id == 'test-user-001':
+            if user_id == TEST_USER_ID:
                 self.logger.debug("👤 Ensuring test user exists")
                 self._ensure_test_user_exists(user_uuid)
             
