@@ -63,6 +63,14 @@ Identity is centralized so real auth can be added later without scattering chang
 - **Frontend:** `src/config/user.ts` exports `CURRENT_USER_ID` and `getCurrentUserId()`. All screens and API calls use this; no hardcoded user ids elsewhere.
 - To switch to real auth: replace `get_current_user_id` (e.g. with JWT) and the frontend config (e.g. with an auth context) in these two places.
 
+## Photo uploads & S3
+
+Photo uploads use a presigned S3 URL: the app requests an upload URL from the backend, uploads the file to S3 with `PUT`, then creates a photo record.
+
+- **Env:** Set in `backend/.env`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` (defaults to `us-east-1` if omitted), and `S3_BUCKET_NAME`.
+- **Health check:** `GET /photos/s3/health` returns `200` with `{ "ok": true, "bucket": "...", "region": "..." }` when S3 is configured and the bucket is reachable, or `503` with an error message otherwise.
+- **Web:** For browser uploads, the S3 bucket must allow CORS (e.g. allow `PUT` from your app origin).
+
 ## Features
 
 - 📸 **Photo Upload & Management** - Seamless photo uploads to AWS S3

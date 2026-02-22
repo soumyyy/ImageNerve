@@ -19,27 +19,16 @@ const api = axios.create({
   },
 });
 
-// Test the API connection
-(async () => {
-  try {
-    console.log('🧪 Testing API connection...');
-    console.log('🔗 Testing URL:', API_BASE_URL);
-    
-    const response = await api.get('/');
-    console.log('✅ API connection successful:', {
-      status: response.status,
-      url: API_BASE_URL,
-      data: response.data
+// Defer API test so app paint isn't blocked
+if (typeof setImmediate !== 'undefined') {
+  setImmediate(() => {
+    api.get('/').then((r) => {
+      console.log('✅ API OK:', API_BASE_URL, r.status);
+    }).catch((e: any) => {
+      console.warn('API test:', e?.message || e);
     });
-  } catch (error: any) {
-    console.error('❌ API connection failed:', {
-      url: API_BASE_URL,
-      error: error.message,
-      code: error.code,
-      response: error.response?.data
-    });
-  }
-})();
+  });
+}
 
 // Photos API
 export const photosAPI = {
@@ -51,9 +40,14 @@ export const photosAPI = {
     });
     console.log('🔄 Getting upload URL | Original:', filename, '| Sanitized:', sanitizedFilename);
     const response = await api.post(`/photos/s3/upload-url?${params.toString()}`);
+    const data = response.data as { url?: string; upload_url?: string; file_url?: string; key?: string; filename?: string };
+    const fileUrlPath = data.file_url || `/photos/s3/proxy-download?filename=${encodeURIComponent(data.filename || sanitizedFilename)}`;
+    const fullFileUrl = fileUrlPath.startsWith('http') ? fileUrlPath : `${API_BASE_URL}${fileUrlPath}`;
     return {
-      ...response.data,
-      sanitizedFilename  // Return sanitized name for later use
+      ...data,
+      upload_url: data.upload_url || data.url,
+      file_url: fullFileUrl,
+      sanitizedFilename: data.filename || sanitizedFilename,
     };
   },
   

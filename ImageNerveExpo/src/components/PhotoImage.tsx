@@ -7,11 +7,13 @@ import Shimmer from './Shimmer';
 
 interface PhotoImageProps {
   photo: Photo;
-  userId: string;  // Add userId prop
-  style?: any;  // Add optional style prop
+  userId: string;
+  style?: any;
+  /** When true, only load thumbnail (no full-res). Use in grid for speed; viewer uses full-res. */
+  thumbnailOnly?: boolean;
 }
 
-export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId, style }) => {
+export const PhotoImage: React.FC<PhotoImageProps> = React.memo(({ photo, userId, style, thumbnailOnly = false }) => {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -27,16 +29,18 @@ export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId, style }) 
     fadeAnim.setValue(0);
     thumbFade.setValue(0);
     loadUrls();
-  }, [photo.id]);
+  }, [photo.id, thumbnailOnly]);
 
   const loadUrls = async () => {
     try {
-      // Low-res thumbnail first
-      const thumb = photosAPI.getThumbnailUrl(photo.filename, 320, 60);
+      const thumb = photosAPI.getThumbnailUrl(photo.filename, 200, 50);
       setThumbUrl(thumb);
-      Animated.timing(thumbFade, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+      Animated.timing(thumbFade, { toValue: 1, duration: 120, useNativeDriver: true }).start();
 
-      // Full-res presigned
+      if (thumbnailOnly) {
+        setIsLoading(false);
+        return;
+      }
       const downloadResponse = await photosAPI.getDownloadUrl(photo.filename, userId);
       setImageUrl(downloadResponse.url);
     } catch (error) {
@@ -87,26 +91,28 @@ export const PhotoImage: React.FC<PhotoImageProps> = ({ photo, userId, style }) 
         </Animated.View>
       )}
 
-      {/* Full-res Layer */}
-      {imageUrl ? (
-        <Animated.View style={[styles.imageContainer, { opacity: fadeAnim }]}>        
-          <ExpoImage
-            source={{ uri: imageUrl }}
-            style={[styles.photoImage, style]}
-            onError={handleImageError}
-            onLoad={handleImageLoad as any}
-            contentFit={style ? 'contain' : 'cover'}
-            transition={200}
-            cachePolicy="memory-disk"
-            recyclingKey={photo.id}
-          />
-        </Animated.View>
-      ) : (
-        <Shimmer style={styles.photoLoading} />
+      {/* Full-res Layer (only when not thumbnailOnly) */}
+      {!thumbnailOnly && (
+        imageUrl ? (
+          <Animated.View style={[styles.imageContainer, { opacity: fadeAnim }]}>        
+            <ExpoImage
+              source={{ uri: imageUrl }}
+              style={[styles.photoImage, style]}
+              onError={handleImageError}
+              onLoad={handleImageLoad as any}
+              contentFit={style ? 'contain' : 'cover'}
+              transition={200}
+              cachePolicy="memory-disk"
+              recyclingKey={photo.id}
+            />
+          </Animated.View>
+        ) : (
+          <Shimmer style={styles.photoLoading} />
+        )
       )}
     </View>
   );
-};
+});
 
 const styles = StyleSheet.create({
   photoImageContainer: {

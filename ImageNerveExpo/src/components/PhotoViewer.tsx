@@ -1,17 +1,23 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Dimensions,
   TouchableOpacity,
-  Animated,
   ScrollView,
   Alert,
   Platform,
-  PanResponder,
-  Easing,
 } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  runOnJS,
+  interpolate,
+  Extrapolation,
+} from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
@@ -41,9 +47,10 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
 }) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [showMetadata, setShowMetadata] = useState(false);
-  const slideAnim = useRef(new Animated.Value(0)).current;
-  const metadataAnim = useRef(new Animated.Value(0)).current;
-  const slideDirection = useRef<'left' | 'right' | null>(null);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const scale = useSharedValue(1);
+  const metadataAnim = useSharedValue(0);
   const [headerHeight, setHeaderHeight] = useState(0);
   const [dockHeight, setDockHeight] = useState(0);
 
@@ -51,118 +58,119 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
   const currentPhoto = photos[currentIndex];
   const nextPhoto = currentIndex < photos.length - 1 ? photos[currentIndex + 1] : null;
   const prevPhoto = currentIndex > 0 ? photos[currentIndex - 1] : null;
-  
-  console.log('📸 Current photo:', currentPhoto?.filename, 'Index:', currentIndex);
 
   // Reset metadata panel when photo changes
   useEffect(() => {
-    console.log('🔄 Photo index changed to:', currentIndex);
     if (showMetadata) {
       setShowMetadata(false);
-      metadataAnim.setValue(0);
+      metadataAnim.value = withSpring(0);
     }
   }, [currentIndex]);
 
-  // Header includes its own top spacing; dock includes bottom padding
   const availablePhotoHeight = Math.max(0, screenHeight - headerHeight - dockHeight);
   const sidePad = Platform.OS === 'web' ? Math.min(210, Math.round(screenWidth * 0.3)) : 0;
   const imageWidth = Math.max(0, screenWidth - sidePad * 2);
 
-  const animateToIndex = (direction: 'left' | 'right') => {
-    if (direction === 'left' && currentIndex < photos.length - 1) {
-      const newIndex = currentIndex + 1;
-      slideDirection.current = 'left';
-      Animated.timing(slideAnim, {
-        toValue: -screenWidth,
-        duration: 240,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }).start(() => {
-        setCurrentIndex(newIndex);
-        slideAnim.setValue(screenWidth);
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 240,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }).start();
-      });
-    } else if (direction === 'right' && currentIndex > 0) {
-      const newIndex = currentIndex - 1;
-      slideDirection.current = 'right';
-      Animated.timing(slideAnim, {
-        toValue: screenWidth,
-        duration: 240,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }).start(() => {
-        setCurrentIndex(newIndex);
-        slideAnim.setValue(-screenWidth);
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 240,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }).start();
-      });
+  const snapToOffset = (offset: number) => {
+    translateX.value = withSpring(offset, {
+      damping: 20,
+      stiffness: 90,
+      mass: 0.5,
+    });
+  };
+
+  // Shared values for gesture — all worklet-safe (no React state in worklets)
+  const hasNext = useSharedValue(currentIndex < photos.length - 1);
+  const hasPrev = useSharedValue(currentIndex > 0);
+
+  // Keep shared boundary values in sync with index changes
+  useEffect(() => {
+    hasNext.value = currentIndex < photos.length - 1;
+    hasPrev.value = currentIndex > 0;
+  }, [currentIndex, photos.length]);
+
+  const changeIndex = useCallback((direction: 'next' | 'prev') => {
+    if (direction === 'next' && currentIndex < photos.length - 1) {
+      setCurrentIndex((prev) => prev + 1);
+      translateX.value = screenWidth;
+      translateX.value = withSpring(0, { damping: 20, stiffness: 90, mass: 0.5 });
+    } else if (direction === 'prev' && currentIndex > 0) {
+      setCurrentIndex((prev) => prev - 1);
+      translateX.value = -screenWidth;
+      translateX.value = withSpring(0, { damping: 20, stiffness: 90, mass: 0.5 });
     } else {
-      Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true }).start();
+      translateX.value = withSpring(0, { damping: 20, stiffness: 90, mass: 0.5 });
     }
-  };
+  }, [currentIndex, photos.length]);
 
-  const handleSwipe = (direction: 'left' | 'right') => {
-    console.log('🔄 Swiping:', direction, 'Current index:', currentIndex, 'Total photos:', photos.length);
-    animateToIndex(direction);
-  };
-
-  // Gesture handling for swipe navigation (velocity + distance)
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gestureState) => {
-        if (showMetadata) return false;
-        const dx = Math.abs(gestureState.dx);
-        const dy = Math.abs(gestureState.dy);
-        return dx > 8 && dx > dy * 1.2; // horizontal intent
-      },
-      onPanResponderMove: (_, gestureState) => {
-        if (showMetadata) return;
-        const dx = gestureState.dx;
-        // Allow following finger; resist if no prev/next
-        const limitLeft = prevPhoto ? screenWidth : screenWidth * 0.12;
-        const limitRight = nextPhoto ? -screenWidth : -screenWidth * 0.12;
-        slideAnim.setValue(Math.max(limitRight, Math.min(dx, limitLeft)));
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        if (showMetadata) return;
-        const dx = gestureState.dx;
-        const vx = gestureState.vx;
-        const distancePass = Math.abs(dx) > screenWidth * 0.12;
-        const velocityPass = Math.abs(vx) > 0.25;
-        if ((dx < 0 && (distancePass || vx < -0.25)) && nextPhoto) {
-          animateToIndex('left');
-        } else if ((dx > 0 && (distancePass || vx > 0.25)) && prevPhoto) {
-          animateToIndex('right');
-        } else {
-          Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true }).start();
-        }
-      },
-      onPanResponderTerminate: () => {
-        Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true }).start();
-      },
+  const panGesture = Gesture.Pan()
+    .activeOffsetX([-8, 8])
+    .failOffsetY([-20, 20])
+    .onUpdate((e) => {
+      translateX.value = e.translationX;
+      if (e.translationY > 0) {
+        translateY.value = e.translationY;
+        scale.value = interpolate(
+          e.translationY,
+          [0, screenHeight / 2],
+          [1, 0.7],
+          Extrapolation.CLAMP
+        );
+      }
     })
-  ).current;
+    .onEnd((e) => {
+      const shouldDismiss = e.translationY > 150 || e.velocityY > 1000;
+      if (shouldDismiss) {
+        runOnJS(onClose)();
+        return;
+      }
+
+      // Reset Y
+      translateY.value = withSpring(0);
+      scale.value = withSpring(1);
+
+      // Decide horizontal
+      const goNext = (e.translationX < -screenWidth * 0.2 || e.velocityX < -500) && hasNext.value;
+      const goPrev = (e.translationX > screenWidth * 0.2 || e.velocityX > 500) && hasPrev.value;
+
+      if (goNext) {
+        runOnJS(changeIndex)('next');
+      } else if (goPrev) {
+        runOnJS(changeIndex)('prev');
+      } else {
+        translateX.value = withSpring(0);
+      }
+    });
 
   const toggleMetadata = () => {
     const toValue = showMetadata ? 0 : 1;
     setShowMetadata(!showMetadata);
-    
-    Animated.spring(metadataAnim, {
-      toValue,
-      useNativeDriver: false,
-      tension: 100,
-      friction: 8,
-    }).start();
+    metadataAnim.value = withSpring(toValue, { damping: 15, stiffness: 120 });
   };
+
+  const animatedPhotoStyle = useAnimatedStyle(() => {
+    return {
+      transform: [
+        { translateX: translateX.value },
+        { translateY: translateY.value },
+        { scale: scale.value }
+      ],
+    };
+  });
+
+  const animatedMetadataStyle = useAnimatedStyle(() => {
+    return {
+      transform: [
+        {
+          translateY: interpolate(
+            metadataAnim.value,
+            [0, 1],
+            [screenHeight, 0]
+          )
+        }
+      ]
+    };
+  });
 
   const handleDownload = async () => {
     try {
@@ -182,6 +190,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
         a.remove();
         return;
       }
+      // @ts-ignore
       const tmpPath = `${FileSystem.cacheDirectory}${filename}`;
       const { uri } = await FileSystem.downloadAsync(url, tmpPath);
       const perm = await MediaLibrary.requestPermissionsAsync();
@@ -197,7 +206,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
           const { url } = await photosAPI.getDownloadUrl(filename, userId);
           await Sharing.shareAsync(url);
           return;
-        } catch {}
+        } catch { }
       }
       Alert.alert('Download failed', e?.message || 'Unable to save photo');
     }
@@ -288,7 +297,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
       location: photo.location,
       tags: photo.tags || [],
     };
-    
+
     return extracted as any;
   };
 
@@ -313,48 +322,38 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
         <View style={{ height: headerHeight }} />
 
         {/* Photo Display */}
-        <View style={styles.photoContainer} {...panResponder.panHandlers}>
-          {/* Edge tap zones */}
-          {currentIndex > 0 && (
-            <TouchableOpacity style={styles.edgeTapLeft} activeOpacity={0.8} onPress={() => handleSwipe('right')} />
-          )}
-          {currentIndex < photos.length - 1 && (
-            <TouchableOpacity style={styles.edgeTapRight} activeOpacity={0.8} onPress={() => handleSwipe('left')} />
-          )}
+        <GestureDetector gesture={panGesture}>
+          <Animated.View style={[styles.photoContainer, animatedPhotoStyle]}>
+            {/* Preloaded Previous Photo (hidden) */}
+            {prevPhoto && (
+              <View style={[styles.preloadedPhoto, { left: -screenWidth }]}>
+                <PhotoImage
+                  photo={prevPhoto}
+                  userId={userId}
+                  style={[styles.fullPhoto, { height: availablePhotoHeight, width: imageWidth, alignSelf: 'center' }]}
+                />
+              </View>
+            )}
 
-          {/* Preloaded Previous Photo (hidden) */}
-          {prevPhoto && (
-            <View style={[styles.preloadedPhoto, { left: -screenWidth }]}> 
-              <PhotoImage 
-                photo={prevPhoto} 
-                userId={userId}
-                style={[styles.fullPhoto, { height: availablePhotoHeight, width: imageWidth, alignSelf: 'center' }]}
-              />
-            </View>
-          )}
-          
-          {/* Current Photo */}
-          <Animated.View style={{
-            transform: [{ translateX: slideAnim }]
-          }}>
-            <PhotoImage 
-              photo={currentPhoto} 
+            {/* Current Photo */}
+            <PhotoImage
+              photo={currentPhoto}
               userId={userId}
               style={[styles.fullPhoto, { height: availablePhotoHeight, width: imageWidth, alignSelf: 'center' }]}
             />
+
+            {/* Preloaded Next Photo (hidden) */}
+            {nextPhoto && (
+              <View style={[styles.preloadedPhoto, { right: -screenWidth }]}>
+                <PhotoImage
+                  photo={nextPhoto}
+                  userId={userId}
+                  style={[styles.fullPhoto, { height: availablePhotoHeight, width: imageWidth, alignSelf: 'center' }]}
+                />
+              </View>
+            )}
           </Animated.View>
-          
-          {/* Preloaded Next Photo (hidden) */}
-          {nextPhoto && (
-            <View style={[styles.preloadedPhoto, { right: -screenWidth }]}> 
-              <PhotoImage 
-                photo={nextPhoto} 
-                userId={userId}
-                style={[styles.fullPhoto, { height: availablePhotoHeight, width: imageWidth, alignSelf: 'center' }]}
-              />
-            </View>
-          )}
-        </View>
+        </GestureDetector>
 
         {/* Glass Dock with actions */}
         <View style={styles.dockWrapper} pointerEvents="box-none">
@@ -385,15 +384,8 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
             styles.metadataPanel,
             {
               zIndex: showMetadata ? 100 : -1,
-              transform: [
-                {
-                  translateY: metadataAnim.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [screenHeight, 0],
-                  }),
-                },
-              ],
             },
+            animatedMetadataStyle,
           ]}
         >
           <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFillObject as any} />

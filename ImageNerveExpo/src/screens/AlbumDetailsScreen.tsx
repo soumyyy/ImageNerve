@@ -42,7 +42,7 @@ export const AlbumDetailsScreen: React.FC<AlbumDetailsScreenProps> = ({ albumId,
           isClusteringRef.current = false;
         }
       }, 2000);
-    } catch {}
+    } catch { }
   }, [userId]);
 
   useEffect(() => {
@@ -66,7 +66,7 @@ export const AlbumDetailsScreen: React.FC<AlbumDetailsScreenProps> = ({ albumId,
 
   if (loading) {
     return (
-      <View style={styles.container}> 
+      <View style={styles.container}>
         <View style={styles.header}><Text style={styles.headerTitle}>Album</Text></View>
         <ActivityIndicator color="#fff" />
       </View>

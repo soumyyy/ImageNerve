@@ -4,7 +4,7 @@ import { Animated } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { pickImage } from '../utils/imageUtils';
 import { getMimeType } from '../utils/fileUtils';
 import { getCurrentUserId } from '../config/user';
@@ -17,7 +17,6 @@ import AlbumDetailsScreen from './AlbumDetailsScreen';
 import NewAlbumModal from '../components/NewAlbumModal';
 import AlbumPickerModal from '../components/AlbumPickerModal';
 import * as Haptics from 'expo-haptics';
-import { LiquidGlassTabBar } from '../components/LiquidGlassTabBar';
 
 // Get screen dimensions for responsive design
 const { width: screenWidth } = Dimensions.get('window');
@@ -36,9 +35,10 @@ const getPhotoItemWidth = () => {
 
 interface DashboardScreenProps {
   onSettingsPress?: () => void;
+  route?: any; // To access React Navigation route params
 }
 
-export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPress }) => {
+export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPress, route }) => {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [albums, setAlbums] = useState<Album[]>([]);
   const [albumPreviews, setAlbumPreviews] = useState<Record<string, Photo[]>>({});
@@ -48,7 +48,10 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [openAlbumId, setOpenAlbumId] = useState<string | null>(null);
   const [scope, setScope] = useState<'mine' | 'everyone'>('mine');
-  const [tab, setTab] = useState<'photos' | 'albums'>('photos');
+
+  // Use route name to determine the current tab mode
+  const tab = route?.name?.toLowerCase() === 'albums' ? 'albums' : 'photos';
+
   const numColumns = isWeb && isLargeScreen ? 6 : (isWeb ? 4 : 3);
   const [showNewAlbum, setShowNewAlbum] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
@@ -62,7 +65,6 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const [isPaginating, setIsPaginating] = useState(false);
 
   const userId = getCurrentUserId();
-  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     loadUserData();
@@ -553,20 +555,13 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={[]}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>ImageNerve</Text>
-        <TouchableOpacity
-          style={styles.profileButton}
-          onPress={onSettingsPress}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.profileButtonText}>⚙</Text>
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>{tab === 'photos' ? 'Photos' : 'Albums'}</Text>
       </View>
 
       {/* Tabs */}
-      {/* Removed top Photos/Albums toggle; now in header */}
+      {/* Removed top Photos/Albums toggle; now in native bottom tab bar */}
 
       {/* Floating minimal Me/Everyone toggle (icons only) */}
       <View style={styles.floatingScopeToggle}>
@@ -618,8 +613,25 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}
           inverted
-          contentContainerStyle={{ paddingTop: insets.bottom + 80, paddingBottom: 0, minHeight: 0, backgroundColor: '#000' }}
-
+          contentContainerStyle={{ paddingTop: 0, paddingBottom: 110, minHeight: 0, backgroundColor: '#000' }}
+          ListHeaderComponent={
+            albums.length > 0 ? (
+              <View style={styles.albumsBar}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.albumsRow}>
+                  {albums.map((a) => (
+                    <AlbumCard
+                      key={a.id}
+                      title={a.name}
+                      count={albumCounts[a.id] ?? (a as any)?.photo_count ?? (a.photo_ids?.length || 0)}
+                      photos={albumPreviews[a.id] || []}
+                      userId={userId}
+                      onPress={() => setOpenAlbumId(a.id)}
+                    />
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
             showProfileFaceCta && scope === 'mine' ? (
               <View style={styles.emptyState}>
@@ -655,13 +667,13 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
             />
           )}
           numColumns={2}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: insets.bottom + 80 }}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 110 }}
         />
       )}
 
-      {/* Floating Add Button — sits above the tab bar */}
+      {/* Floating Add Button */}
       <TouchableOpacity
-        style={[styles.floatingAddButton, uploading && styles.buttonDisabled, { bottom: Math.max(insets.bottom + 68, 80) }]}
+        style={[styles.floatingAddButton, uploading && styles.buttonDisabled]}
         onPress={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
           setShowAddMenu(true);
@@ -670,13 +682,6 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
       >
         <Text style={styles.floatingAddButtonText}>+</Text>
       </TouchableOpacity>
-
-      {/* Liquid Glass Tab Bar */}
-      <LiquidGlassTabBar
-        activeTab={tab}
-        onTabPress={setTab}
-        bottomInset={insets.bottom}
-      />
 
       {/* Add Menu (Action Sheet) */}
       <Modal visible={showAddMenu} transparent animationType="fade" onRequestClose={() => setShowAddMenu(false)}>

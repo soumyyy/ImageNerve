@@ -35,10 +35,10 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
     try {
       const userId = getCurrentUserId();
       const photos = await photosAPI.getUserPhotos(userId);
-      
+
       // Calculate total size (assuming average 2MB per photo)
       const totalSize = photos.length * 2 * 1024 * 1024; // 2MB per photo
-      
+
       setUserStats({
         totalPhotos: photos.length,
         totalSize,
@@ -90,7 +90,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
         <Text style={styles.headerTitle}>Settings</Text>
         <View style={styles.headerSpacer} />
       </View>
-      
+
       <ScrollView style={styles.content}>
         {/* Profile Section */}
         <View style={styles.section}>
@@ -120,11 +120,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
             </View>
             <View style={styles.storageProgress}>
               <View style={styles.progressBar}>
-                <View 
+                <View
                   style={[
-                    styles.progressFill, 
+                    styles.progressFill,
                     { width: `${Math.min((userStats.totalSize / (5 * 1024 * 1024 * 1024)) * 100, 100)}%` }
-                  ]} 
+                  ]}
                 />
               </View>
               <Text style={styles.progressText}>
@@ -175,7 +175,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
                 </View>
                 <Text style={styles.settingArrow}>›</Text>
               </TouchableOpacity>
-              
+
               {profileStatus?.exists ? (
                 <View style={styles.statusCard}>
                   <Text style={styles.statusText}>✅ Face profile configured</Text>
@@ -231,7 +231,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
 
         {/* Logout Section */}
         <View style={styles.section}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.logoutButton}
             onPress={() => Alert.alert('Logout', 'Logout functionality coming soon!')}
           >

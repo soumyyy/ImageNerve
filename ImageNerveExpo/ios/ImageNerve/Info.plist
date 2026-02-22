@@ -52,10 +52,14 @@
     </dict>
     <key>NSCameraUsageDescription</key>
     <string>Allow ImageNerve to use your camera to capture your face profile.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Allow $(PRODUCT_NAME) to access your microphone</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>Allow ImageNerve to save photos to your library.</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>Allow ImageNerve to access your photo library.</string>
+    <key>RCTNewArchEnabled</key>
+    <true/>
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
     <key>UILaunchStoryboardName</key>

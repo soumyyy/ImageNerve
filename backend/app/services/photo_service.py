@@ -98,8 +98,12 @@ class PhotoService:
             raise
 
     def get_photo_by_id(self, photo_id: str) -> Optional[Photo]:
-        """Get a photo by its ID."""
-        return self.db.query(Photo).filter(Photo.id == uuid.UUID(photo_id)).first()
+        """Get a photo by its ID. Returns None if photo_id is not a valid UUID or not found."""
+        try:
+            photo_uuid = uuid.UUID(photo_id)
+        except (ValueError, TypeError):
+            return None
+        return self.db.query(Photo).filter(Photo.id == photo_uuid).first()
 
     def get_photos_by_user(self, user_id: str, limit: int = 50, before: Optional[datetime] = None) -> List[Photo]:
         """Get photos for a user ordered by newest first. If 'before' is provided,

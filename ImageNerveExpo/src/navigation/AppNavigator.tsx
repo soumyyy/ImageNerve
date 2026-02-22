@@ -1,5 +1,5 @@
 import React from 'react';
-import { createStackNavigator } from '@react-navigation/stack';
+import { createStackNavigator, TransitionPresets } from '@react-navigation/stack';
 import { SplashScreen } from '../screens/SplashScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { OTPScreen } from '../screens/OTPScreen';
@@ -14,6 +14,8 @@ export const AppNavigator: React.FC = () => {
       screenOptions={{
         headerShown: false,
         cardStyle: { backgroundColor: '#0f3460' },
+        gestureEnabled: true,
+        ...TransitionPresets.SlideFromRightIOS,
       }}
     >
       <Stack.Screen name="Splash" component={SplashScreen} />

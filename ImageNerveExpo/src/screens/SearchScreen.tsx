@@ -10,7 +10,7 @@ export const SearchScreen: React.FC = () => {
     <SafeAreaView style={styles.container}>
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={styles.searchTitle}>Search</Text>
-        
+
         <GlassCard style={styles.searchSection}>
           <TextInput
             style={styles.glassSearchInput}
@@ -20,7 +20,7 @@ export const SearchScreen: React.FC = () => {
             onChangeText={setSearchQuery}
           />
         </GlassCard>
-        
+
         <GlassCard style={styles.settingsSection}>
           <Text style={styles.sectionTitle}>Relevant Searches</Text>
           <View style={styles.relevantSearches}>

@@ -1,5 +1,7 @@
 import React from 'react';
-import { View, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, StyleSheet, TouchableWithoutFeedback } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
 
 interface GlassCardProps {
   children: React.ReactNode;
@@ -8,11 +10,30 @@ interface GlassCardProps {
 }
 
 export const GlassCard: React.FC<GlassCardProps> = ({ children, style, onPress }) => {
+  const scale = useSharedValue(1);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: scale.value }],
+    };
+  });
+
   if (onPress) {
     return (
-      <TouchableOpacity style={[styles.glassCard, style]} onPress={onPress} activeOpacity={0.8}>
-        {children}
-      </TouchableOpacity>
+      <TouchableWithoutFeedback
+        onPressIn={() => {
+          scale.value = withSpring(0.96, { damping: 12, stiffness: 200 });
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        }}
+        onPressOut={() => {
+          scale.value = withSpring(1, { damping: 10, stiffness: 150 });
+        }}
+        onPress={onPress}
+      >
+        <Animated.View style={[styles.glassCard, style, animatedStyle]}>
+          {children}
+        </Animated.View>
+      </TouchableWithoutFeedback>
     );
   }
   return (
