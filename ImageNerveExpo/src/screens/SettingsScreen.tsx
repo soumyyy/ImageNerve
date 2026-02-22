@@ -42,7 +42,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBackPress }) =
       setUserStats({
         totalPhotos: photos.length,
         totalSize,
-        username: 'Test User',
+        username: getCurrentUserId(),
       });
     } catch (error) {
       console.error('Failed to load user stats:', error);

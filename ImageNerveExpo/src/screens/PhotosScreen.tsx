@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform, Dimensions, FlatList, ListRenderItemInfo, Image as RNImage, Modal } from 'react-native';
 import { Animated } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { pickImage } from '../utils/imageUtils';
-import { getMimeType } from '../utils/fileUtils';
+import { pickImages, MULTI_PICK_LIMIT, type ImagePickerResult } from '../utils/imageUtils';
+import { uploadPhotosBatch } from '../utils/uploadPhotos';
 import { getCurrentUserId } from '../config/user';
 import { photosAPI, facesAPI, albumsAPI } from '../services/api';
 import { Photo, Album } from '../types';
@@ -45,6 +45,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const [albumCounts, setAlbumCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [openAlbumId, setOpenAlbumId] = useState<string | null>(null);
   const [scope, setScope] = useState<'mine' | 'everyone'>('mine');
@@ -55,7 +56,8 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const numColumns = isWeb && isLargeScreen ? 6 : (isWeb ? 4 : 3);
   const [showNewAlbum, setShowNewAlbum] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
-  const [showAlbumPicker, setShowAlbumPicker] = useState<null | { photoId?: string; purpose: 'assign-existing' | 'upload-new' }>(null);
+  const [showAlbumPicker, setShowAlbumPicker] = useState<null | { photoId?: string; purpose: 'assign-existing' | 'upload-new' | 'upload-new-with-images' }>(null);
+  const pendingUploadImagesRef = useRef<ImagePickerResult[] | null>(null);
   const [showProfileFaceCta, setShowProfileFaceCta] = useState(false);
   const segmentAnim = React.useRef(new Animated.Value(0)).current;
   const scopeToggleWidth = 96; // fixed width for floating toggle
@@ -265,254 +267,32 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const handlePhotoUpload = async (targetAlbumId?: string) => {
     try {
       setUploading(true);
-      console.log('📸 Starting photo upload process...');
-
-      // Pick image using cross-platform picker
-      const imageResult = await pickImage();
-      if (!imageResult) {
-        console.log('❌ No image selected');
-        return;
-      }
-      console.log('✅ Image selected:', imageResult.name, '| Type:', imageResult.type);
-
-      // Get presigned URL for S3 upload
-      console.log('🔐 Getting upload URL...');
-      const uploadUrlResponse = await photosAPI.getUploadUrl(imageResult.name, userId);
-      console.log('✅ Upload URL received | Sanitized filename:', uploadUrlResponse.sanitizedFilename);
-
-      // Create a temporary photo object for immediate display
-      const tempPhoto: Photo = {
-        id: `temp-${Date.now()}`,
-        user_id: userId,
-        s3_url: imageResult.uri, // Use local URI for immediate display
-        filename: uploadUrlResponse.sanitizedFilename,
-        tags: [],
-        uploaded_at: new Date().toISOString(),
-        description: 'Uploading...',
-        is_public: false,
-        photo_metadata: {
-          file_size: imageResult.size,
-          format: imageResult.type,
-          dimensions: 'Unknown',
-          uploaded_from: 'mobile_app',
-          upload_timestamp: new Date().toISOString(),
-        }
-      };
-
-      // Add temp photo to the beginning of the list for immediate display
-      setPhotos(prevPhotos => [tempPhoto, ...prevPhotos]);
-
-      // Prepare upload body with proper mime type
-      console.log('📦 Preparing upload body...');
-      let uploadBody;
-      const mimeType = getMimeType(imageResult.name);
-
-      if (Platform.OS === 'web') {
-        uploadBody = await fetch(imageResult.uri).then(r => r.blob());
-      } else {
-        const response = await fetch(imageResult.uri);
-        uploadBody = await response.blob();
-      }
-
-      // Upload to S3 with retries
-      console.log('☁️ Starting S3 upload:', {
-        filename: uploadUrlResponse.sanitizedFilename,
-        size: uploadBody.size,
-        type: mimeType
+      const images = await pickImages(MULTI_PICK_LIMIT);
+      if (!images.length) return;
+      setUploadProgress({ current: 0, total: images.length });
+      const { faceCount } = await uploadPhotosBatch(userId, images, {
+        targetAlbumId,
+        onProgress: (current, total) => setUploadProgress({ current, total }),
       });
-
-      let uploadSuccess = false;
-      const maxRetries = 3;
-      const startTime = Date.now();
-      let lastError = null;
-
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        const attemptStart = Date.now();
-        try {
-          // First verify the upload URL is valid
-          if (!uploadUrlResponse.upload_url) {
-            throw new Error('No upload URL provided');
-          }
-
-          // Attempt the upload with timeout
-          // Parse the presigned URL to get the base URL and query parameters
-          const presignedUrl = new URL(uploadUrlResponse.upload_url);
-          const baseUrl = `${presignedUrl.origin}${presignedUrl.pathname}`;
-          const queryParams = Object.fromEntries(presignedUrl.searchParams);
-
-          console.log('🔄 Uploading to:', {
-            baseUrl,
-            queryParams,
-            contentType: mimeType,
-            size: uploadBody.size
-          });
-
-          const response = await Promise.race([
-            fetch(uploadUrlResponse.upload_url, {
-              method: 'PUT',
-              body: uploadBody,
-              headers: {
-                'Content-Type': mimeType,
-              },
-              mode: 'cors',
-            }),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Upload timeout')), 30000)
-            )
-          ]) as Response;
-
-          const attemptDuration = (Date.now() - attemptStart) / 1000;
-
-          // Check response status
-          if (!response.ok) {
-            const errorText = await response.text().catch(() => 'No error details');
-            throw new Error(`Upload failed with status ${response.status}: ${errorText}`);
-          }
-
-          // Upload successful
-          console.log('✅ S3 upload successful:', {
-            attempt,
-            duration: attemptDuration.toFixed(2) + 's',
-            status: response.status,
-            size: uploadBody.size,
-          });
-
-          uploadSuccess = true;
-          break;
-
-        } catch (error: any) {
-          lastError = error;
-          const attemptDuration = (Date.now() - attemptStart) / 1000;
-
-          console.warn(`⚠️ Upload attempt ${attempt} failed:`, {
-            error: error.message,
-            duration: attemptDuration.toFixed(2) + 's'
-          });
-
-          if (attempt === maxRetries) {
-            console.error('❌ All upload attempts failed:', {
-              attempts: maxRetries,
-              finalError: error.message
-            });
-            throw new Error(`Failed to upload after ${maxRetries} attempts: ${error.message}`);
-          }
-
-          // Wait before retry with exponential backoff
-          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
-          console.log(`⏳ Waiting ${delay}ms before retry...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-      }
-
-      if (!uploadSuccess) {
-        throw new Error('Upload failed: ' + (lastError?.message || 'Unknown error'));
-      }
-
-      console.log('✅ S3 upload successful');
-
-      // Create photo record in database
-      console.log('🗄️ Creating photo record...', {
-        filename: uploadUrlResponse.sanitizedFilename,
-        url: uploadUrlResponse.file_url
-      });
-
-      // Extract basic metadata from the image
-      const imageMetadata = {
-        file_size: uploadBody.size,
-        format: mimeType,
-        dimensions: 'Unknown', // Will be extracted on backend if possible
-        uploaded_from: 'mobile_app',
-        upload_timestamp: new Date().toISOString(),
-      };
-
-      const photoData = {
-        user_id: userId,
-        s3_url: uploadUrlResponse.file_url,
-        filename: uploadUrlResponse.sanitizedFilename,
-        description: 'Uploaded from mobile app',
-        is_public: false,
-        album_ids: targetAlbumId ? [targetAlbumId] : undefined,
-        skip_default_album: !!targetAlbumId,
-        photo_metadata: imageMetadata,
-      };
-
-      let photo: Photo;
-      try {
-        photo = await photosAPI.createPhoto(photoData);
-        console.log('✅ Photo record created:', {
-          id: photo.id,
-          filename: photo.filename,
-          url: photo.s3_url
-        });
-
-        // Remove temp photo and add real photo
-        setPhotos(prevPhotos => {
-          const filteredPhotos = prevPhotos.filter(p => p.id !== tempPhoto.id);
-          return [photo, ...filteredPhotos];
-        });
-
-        // If an album was chosen, add photo to that album
-        if (targetAlbumId) {
-          try {
-            console.log('📚 Adding photo to album:', targetAlbumId);
-            await albumsAPI.addPhotosToAlbum(targetAlbumId, userId, [photo.id]);
-          } catch (albumErr) {
-            console.warn('⚠️ Failed to add photo to selected album:', albumErr);
-          }
-        }
-      } catch (error: any) {
-        console.error('❌ Failed to create photo record:', {
-          error: error.response?.data?.detail || error.message,
-          status: error.response?.status,
-          data: photoData
-        });
-        throw new Error(`Failed to create photo record: ${error.response?.data?.detail || error.message}`);
-      }
-
-      // Try to detect faces with retries
-      let faceCount = 0;
-      try {
-        console.log('🤖 Starting face detection...');
-        const formData = new FormData();
-
-        if (Platform.OS === 'web') {
-          const blob = await fetch(imageResult.uri).then(r => r.blob());
-          formData.append('file', blob, uploadUrlResponse.sanitizedFilename);
-        } else {
-          formData.append('file', {
-            uri: imageResult.uri,
-            type: mimeType,
-            name: uploadUrlResponse.sanitizedFilename,
-          } as any);
-        }
-
-        const faceResult = await facesAPI.detectAndStore(formData, photo.id, userId);
-        faceCount = faceResult.faces?.length || 0;
-        console.log('✅ Face detection completed | Faces found:', faceCount);
-        // Schedule debounced clustering to refresh People tab
-        scheduleClusterRefresh();
-      } catch (faceError: any) {
-        console.warn('⚠️ Face detection skipped:', faceError.message || faceError);
-        // Even if detection fails, still schedule clustering to keep state consistent
-        scheduleClusterRefresh();
-      }
-
+      scheduleClusterRefresh();
+      const total = images.length;
       Alert.alert(
         'Success!',
-        `Photo uploaded successfully!${faceCount > 0 ? ` Found ${faceCount} faces.` : ''}`
+        total === 1
+          ? `Photo uploaded.${faceCount > 0 ? ` Found ${faceCount} faces.` : ''}`
+          : `${total} photos uploaded.${faceCount > 0 ? ` Faces detected in some.` : ''}`,
       );
-
-      // Brief pause for S3 propagation then reload
-      await new Promise(resolve => setTimeout(resolve, 300));
-      console.log('🔄 Reloading photos...');
+      await new Promise((r) => setTimeout(r, 300));
       await loadUserData();
-
     } catch (error: any) {
       console.error('Upload error:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Failed to upload photo. Please try again.';
-      Alert.alert('Upload Error', errorMessage);
+      Alert.alert(
+        'Upload Error',
+        error.response?.data?.detail || error.message || 'Failed to upload. Please try again.',
+      );
     } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   };
 
@@ -592,6 +372,14 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
         </View>
       </View>
 
+      {uploading && uploadProgress && (
+        <View style={styles.uploadProgressOverlay}>
+          <ActivityIndicator size="large" color="#fff" />
+          <Text style={styles.uploadProgressText}>
+            Uploading {uploadProgress.current}/{uploadProgress.total}
+          </Text>
+        </View>
+      )}
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#ffffff" />
@@ -701,9 +489,13 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => {
-                // Close menu first, then open album picker to avoid iOS modal stacking freeze
                 setShowAddMenu(false);
-                setTimeout(() => setShowAlbumPicker({ purpose: 'upload-new' }), 300);
+                setTimeout(async () => {
+                  const images = await pickImages(MULTI_PICK_LIMIT);
+                  if (!images.length) return;
+                  pendingUploadImagesRef.current = images;
+                  setShowAlbumPicker({ purpose: 'upload-new-with-images' });
+                }, 300);
               }}
             >
               <Text style={styles.menuItemText}>Add To Album</Text>
@@ -737,20 +529,48 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
       <AlbumPickerModal
         visible={!!showAlbumPicker}
         userId={userId}
-        defaultToMyPhotos={true}
+        defaultToMyPhotos={false}
         onClose={() => setShowAlbumPicker(null)}
         onPick={async (albumId) => {
-          try {
-            if (showAlbumPicker?.purpose === 'assign-existing') {
-              const photoId = showAlbumPicker?.photoId;
-              if (photoId) {
-                await albumsAPI.addPhotosToAlbum(albumId, userId, [photoId]);
-              }
-            } else if (showAlbumPicker?.purpose === 'upload-new') {
-              await handlePhotoUpload(albumId);
+          const purpose = showAlbumPicker?.purpose;
+          const photoId = showAlbumPicker?.photoId;
+          const imagesToUpload = purpose === 'upload-new-with-images' ? pendingUploadImagesRef.current : null;
+          pendingUploadImagesRef.current = null;
+          setShowAlbumPicker(null);
+          if (purpose === 'upload-new-with-images' && imagesToUpload?.length) {
+            try {
+              setUploading(true);
+              setUploadProgress({ current: 0, total: imagesToUpload.length });
+              const { faceCount } = await uploadPhotosBatch(userId, imagesToUpload, {
+                targetAlbumId: albumId,
+                onProgress: (current, total) => setUploadProgress({ current, total }),
+              });
+              scheduleClusterRefresh();
+              const total = imagesToUpload.length;
+              Alert.alert(
+                'Success!',
+                total === 1
+                  ? `Photo uploaded.${faceCount > 0 ? ` Found ${faceCount} faces.` : ''}`
+                  : `${total} photos uploaded.${faceCount > 0 ? ` Faces detected in some.` : ''}`,
+              );
+              await new Promise((r) => setTimeout(r, 300));
+              await loadUserData();
+            } catch (error: any) {
+              console.error('Upload error:', error);
+              Alert.alert(
+                'Upload Error',
+                error.response?.data?.detail || error.message || 'Failed to upload. Please try again.',
+              );
+            } finally {
+              setUploading(false);
+              setUploadProgress(null);
             }
-
-            // refresh previews
+            return;
+          }
+          try {
+            if (purpose === 'assign-existing' && photoId) {
+              await albumsAPI.addPhotosToAlbum(albumId, userId, [photoId]);
+            }
             const previews: Record<string, Photo[]> = {} as any;
             const userAlbums = await albumsAPI.getUserAlbums(userId, scope === 'everyone');
             setAlbums(userAlbums);
@@ -763,8 +583,6 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
             setAlbumPreviews(previews);
           } catch (e) {
             console.log('Album operation failed', e);
-          } finally {
-            setShowAlbumPicker(null);
           }
         }}
       />
@@ -912,6 +730,21 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.7)',
     marginTop: 12,
     fontWeight: '500',
+  },
+  uploadProgressOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  uploadProgressText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginTop: 8,
+    fontWeight: '600',
   },
   emptyState: {
     flex: 1,

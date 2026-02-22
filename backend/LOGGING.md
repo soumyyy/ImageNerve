@@ -34,14 +34,14 @@ backend/logs/
 
 ### Console Output (Colored)
 ```
-2024-12-19 14:30:25 | INFO     | imagenerve.routes.photos:104 | 🚀 UPLOAD START | User: test-user-001 | File: photo.jpg
+2024-12-19 14:30:25 | INFO     | imagenerve.routes.photos:104 | 🚀 UPLOAD START | User: testuser | File: photo.jpg
 2024-12-19 14:30:25 | INFO     | imagenerve.services.s3:26    | ☁️ Generating presigned upload URL | Key: photo.jpg | Expiration: 3600s
 2024-12-19 14:30:25 | INFO     | imagenerve.services.photo:61 | ✅ Photo record created successfully | Photo ID: 123e4567-e89b-12d3-a456-426614174000
 ```
 
 ### File Format (Detailed)
 ```
-2024-12-19 14:30:25 | INFO     | imagenerve.routes.photos:104 | handlePhotoUpload | 🚀 UPLOAD START | User: test-user-001 | File: photo.jpg
+2024-12-19 14:30:25 | INFO     | imagenerve.routes.photos:104 | handlePhotoUpload | 🚀 UPLOAD START | User: testuser | File: photo.jpg
 ```
 
 ## 🚀 **Complete Photo Upload Logging Flow**
@@ -57,19 +57,19 @@ When you upload a photo, here's what gets logged:
 
 ### 2. **Photo Record Creation**
 ```
-🚀 UPLOAD START | User: test-user-001 | File: IMG_20241219_143025.jpg
-📸 Photo Creation Request | User: test-user-001 | File: IMG_20241219_143025.jpg | S3 URL: https://...
-🗄️ Creating photo record | User: test-user-001 | File: IMG_20241219_143025.jpg
-🔄 Generated UUID from string: test-user-001 -> 550e8400-e29b-41d4-a716-446655440000
+🚀 UPLOAD START | User: testuser | File: IMG_20241219_143025.jpg
+📸 Photo Creation Request | User: testuser | File: IMG_20241219_143025.jpg | S3 URL: https://...
+🗄️ Creating photo record | User: testuser | File: IMG_20241219_143025.jpg
+🔄 Generated UUID from string: testuser -> 550e8400-e29b-41d4-a716-446655440000
 🆔 Generated photo ID: 123e4567-e89b-12d3-a456-426614174000
-🗄️ DB insert SUCCESS | Table: photos | ID: 123e4567-e89b-12d3-a456-426614174000 | User: test-user-001
+🗄️ DB insert SUCCESS | Table: photos | ID: 123e4567-e89b-12d3-a456-426614174000 | User: testuser
 ✅ Photo record created successfully | Photo ID: 123e4567-e89b-12d3-a456-426614174000 | Duration: 0.123s
-✅ UPLOAD SUCCESS | User: test-user-001 | File: IMG_20241219_143025.jpg | Photo ID: 123e4567-e89b-12d3-a456-426614174000 | Duration: 0.156s
+✅ UPLOAD SUCCESS | User: testuser | File: IMG_20241219_143025.jpg | Photo ID: 123e4567-e89b-12d3-a456-426614174000 | Duration: 0.156s
 ```
 
 ### 3. **Face Detection (Optional)**
 ```
-🤖 Face detect-and-store request | Photo ID: 123e4567-e89b-12d3-a456-426614174000 | User: test-user-001 | File: IMG_20241219_143025.jpg
+🤖 Face detect-and-store request | Photo ID: 123e4567-e89b-12d3-a456-426614174000 | User: testuser | File: IMG_20241219_143025.jpg
 📥 File read | Size: 2457600 bytes | File: IMG_20241219_143025.jpg
 📸 Image loaded | File: IMG_20241219_143025.jpg | Shape: (1920, 1080, 3)
 🤖 FACE DETECTION SUCCESS | File: IMG_20241219_143025.jpg | Faces: 2 | Duration: 1.234s
@@ -78,10 +78,10 @@ When you upload a photo, here's what gets logged:
 
 ### 4. **Photo Retrieval**
 ```
-📋 Fetching photos for user | User: test-user-001 | Limit: 50
-🔄 Generated UUID from string: test-user-001 -> 550e8400-e29b-41d4-a716-446655440000
-🗄️ DB select SUCCESS | Table: photos | ID: user_test-user-001 | Found 5 photos
-✅ Successfully fetched 5 photos for user test-user-001
+📋 Fetching photos for user | User: testuser | Limit: 50
+🔄 Generated UUID from string: testuser -> 550e8400-e29b-41d4-a716-446655440000
+🗄️ DB select SUCCESS | Table: photos | ID: user_testuser | Found 5 photos
+✅ Successfully fetched 5 photos for user testuser
 📅 Photo range: 2024-12-19 12:30:25 to 2024-12-19 14:30:25
 ```
 
@@ -127,8 +127,8 @@ Look for these log patterns:
 ### **Upload Issues**
 ```
 ❌ Failed to generate S3 upload URL | Filename: photo.jpg | Error: ...
-❌ Failed to create photo record | User: test-user-001 | Error: ...
-❌ UPLOAD FAILED | User: test-user-001 | File: photo.jpg | Error: ... | Duration: 2.34s
+❌ Failed to create photo record | User: testuser | Error: ...
+❌ UPLOAD FAILED | User: testuser | File: photo.jpg | Error: ... | Duration: 2.34s
 ```
 
 ### **Face Detection Issues**
@@ -150,7 +150,7 @@ All operations include timing information:
 ✅ S3 presigned_upload SUCCESS | File: photo.jpg | Duration: 0.045s | Expires: 3600s
 ✅ DB insert SUCCESS | Table: photos | Duration: 0.089s
 🤖 FACE DETECTION SUCCESS | File: photo.jpg | Faces: 1 | Duration: 1.234s
-✅ API GET /photos/ | User: test-user-001 | Status: 200 | Duration: 0.156s
+✅ API GET /photos/ | User: testuser | Status: 200 | Duration: 0.156s
 ```
 
 ## 🔧 **Custom Logging Functions**

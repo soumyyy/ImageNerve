@@ -39,21 +39,24 @@ const FaceProfileWizard: React.FC<FaceProfileWizardProps> = ({ visible, userId, 
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
 
-  const takeShot = async () => {
+  /** Returns captured image URI or null. Caller can collect URIs for save (avoids stale state). */
+  const takeShot = async (): Promise<string | null> => {
     try {
       const camPerm = await ImagePicker.requestCameraPermissionsAsync();
       setPermissionStatus(camPerm.status as any);
       if (camPerm?.status !== 'granted') {
         Alert.alert('Permission', 'Camera permission required');
-        return;
+        return null;
       }
       if (Platform.OS === 'web') {
-        // Web fallback to browser camera intent
         const res = await ImagePicker.launchCameraAsync({ quality: 0.9 } as any);
-        if (!res.canceled && res.assets?.[0]) setShots(prev => [...prev, { uri: res.assets![0].uri }]);
-        return;
+        if (!res.canceled && res.assets?.[0]) {
+          const uri = res.assets![0].uri;
+          setShots(prev => [...prev, { uri }]);
+          return uri;
+        }
+        return null;
       }
-      // Native: programmatic capture from embedded Camera in dev build
       if (cameraRef.current && (cameraRef.current as any).takePictureAsync) {
         const pic = await (cameraRef.current as any).takePictureAsync({ quality: 0.85, skipProcessing: true } as any);
         if (pic?.uri) {
@@ -65,14 +68,13 @@ const FaceProfileWizard: React.FC<FaceProfileWizardProps> = ({ visible, userId, 
             } catch {}
           }
           setShots(prev => [...prev, { uri }]);
-          return;
+          return uri;
         }
+        return null;
       }
-      // Fallback to system camera UI
       const res = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: 0.9, cameraType: 'front' } as any);
       if (!res.canceled && res.assets?.[0]) {
         let uri = res.assets![0].uri;
-        // Convert HEIC to JPEG if needed
         if (uri.toLowerCase().endsWith('.heic') || uri.toLowerCase().endsWith('.heif')) {
           try {
             const manipulated = await ImageManipulator.manipulateAsync(uri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG });
@@ -80,9 +82,12 @@ const FaceProfileWizard: React.FC<FaceProfileWizardProps> = ({ visible, userId, 
           } catch {}
         }
         setShots(prev => [...prev, { uri }]);
+        return uri;
       }
+      return null;
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'Failed to capture');
+      return null;
     }
   };
 
@@ -96,16 +101,31 @@ const FaceProfileWizard: React.FC<FaceProfileWizardProps> = ({ visible, userId, 
       setRunning(true);
       setShots([]);
       setStep(0);
-      // small warm-up delay
       await new Promise(r => setTimeout(r, 600));
+      const collectedUris: string[] = [];
       for (let i = 0; i < REQUIRED_SHOTS; i++) {
         setStep(i);
         await new Promise(r => setTimeout(r, 600));
-        await takeShot();
+        const uri = await takeShot();
+        if (uri) collectedUris.push(uri);
       }
       setRunning(false);
-      // auto-save
-      await saveProfile();
+      if (collectedUris.length >= REQUIRED_SHOTS) {
+        setBusy(true);
+        try {
+          const form = new FormData();
+          collectedUris.forEach((uri, idx) => form.append('files', { uri, name: `shot_${idx + 1}.jpg`, type: 'image/jpeg' } as any));
+          const result = await facesAPI.setProfileFaceBatch(form, userId);
+          if (!result.success) throw new Error((result as { message?: string }).message || 'Failed to save profile');
+          onSaved?.(result);
+          Alert.alert('Saved', `Profile set. Accepted ${result.accepted}. Suggested threshold ${result.suggested_threshold ?? ''}`);
+          onClose();
+        } catch (e: any) {
+          Alert.alert('Error', e?.message || 'Failed to save profile');
+        } finally {
+          setBusy(false);
+        }
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
@@ -114,11 +134,10 @@ const FaceProfileWizard: React.FC<FaceProfileWizardProps> = ({ visible, userId, 
     if (shots.length < REQUIRED_SHOTS) return;
     try {
       setBusy(true);
-      // For responsiveness: quickly generate embeddings server-side via batch endpoint
       const form = new FormData();
       shots.forEach((s, idx) => form.append('files', { uri: s.uri, name: `shot_${idx + 1}.jpg`, type: 'image/jpeg' } as any));
       const result = await facesAPI.setProfileFaceBatch(form, userId);
-      if (!result.success) throw new Error('Failed to save profile');
+      if (!result.success) throw new Error((result as { message?: string }).message || 'Failed to save profile');
       onSaved?.(result);
       Alert.alert('Saved', `Profile set. Accepted ${result.accepted}. Suggested threshold ${result.suggested_threshold ?? ''}`);
       onClose();

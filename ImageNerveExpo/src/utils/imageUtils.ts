@@ -67,6 +67,56 @@ export const pickImage = async (): Promise<ImagePickerResult | null> => {
   }
 };
 
+/** Max selection when picking from Photos app (iOS/Android). Default 50. */
+export const MULTI_PICK_LIMIT = 50;
+
+/**
+ * Pick multiple images from the library (e.g. Photos app). Limit 50 on iOS/Android.
+ * Returns array of ImagePickerResult; empty if canceled.
+ */
+export const pickImages = async (limit: number = MULTI_PICK_LIMIT): Promise<ImagePickerResult[]> => {
+  try {
+    await requestPermissions();
+
+    if (Platform.OS === 'web') {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'] as any,
+        allowsEditing: false,
+        quality: 1,
+        allowsMultipleSelection: true,
+        selectionLimit: Math.min(limit, 50),
+      } as any);
+      if (result.canceled || !result.assets?.length) return [];
+      return result.assets.map((asset, idx) => ({
+        uri: asset.uri,
+        type: 'image/jpeg',
+        name: asset.fileName || `photo_${Date.now()}_${idx}.jpg`,
+        size: asset.fileSize,
+      }));
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'] as any,
+      allowsEditing: false,
+      quality: 1,
+      presentationStyle: 'fullScreen',
+      allowsMultipleSelection: true,
+      selectionLimit: Math.min(limit, 50),
+    } as any);
+
+    if (result.canceled || !result.assets?.length) return [];
+    return result.assets.map((asset, idx) => ({
+      uri: asset.uri,
+      type: 'image/jpeg',
+      name: asset.fileName || `photo_${Date.now()}_${idx}.jpg`,
+      size: asset.fileSize,
+    }));
+  } catch (error) {
+    console.error('Error picking images:', error);
+    throw error;
+  }
+};
+
 export const createFormData = (imageResult: ImagePickerResult, additionalData?: Record<string, any>) => {
   const formData = new FormData();
   

@@ -3,8 +3,8 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, Dimensions, Activit
 import { albumsAPI, photosAPI, facesAPI } from '../services/api';
 import { Photo } from '../types';
 import { PhotoImage } from '../components/PhotoImage';
-import { pickImage } from '../utils/imageUtils';
-import { getMimeType } from '../utils/fileUtils';
+import { pickImages, MULTI_PICK_LIMIT } from '../utils/imageUtils';
+import { uploadPhotosBatch } from '../utils/uploadPhotos';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -22,6 +22,7 @@ export const AlbumDetailsScreen: React.FC<AlbumDetailsScreenProps> = ({ albumId,
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
 
   // Debounce clustering similar to dashboard
   const clusterDebounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -76,53 +77,35 @@ export const AlbumDetailsScreen: React.FC<AlbumDetailsScreenProps> = ({ albumId,
   const uploadToThisAlbum = async () => {
     try {
       setUploading(true);
-      const imageResult = await pickImage();
-      if (!imageResult) return;
-      const uploadUrlResponse = await photosAPI.getUploadUrl(imageResult.name, userId);
-      const mimeType = getMimeType(imageResult.name);
-      const blob = await fetch(imageResult.uri).then(r => r.blob());
-      const putResp = await fetch(uploadUrlResponse.upload_url, { method: 'PUT', body: blob, headers: { 'Content-Type': mimeType } });
-      if (!putResp.ok) throw new Error(`S3 upload failed ${putResp.status}`);
-      const photoData = {
-        user_id: userId,
-        s3_url: uploadUrlResponse.file_url,
-        filename: uploadUrlResponse.sanitizedFilename || uploadUrlResponse.filename,
-        description: 'Uploaded from mobile app',
-        is_public: false,
-        album_ids: [albumId],
-        skip_default_album: true,
-        photo_metadata: {
-          file_size: (blob as any).size,
-          format: mimeType,
-          uploaded_from: 'mobile_app',
-          upload_timestamp: new Date().toISOString(),
-        },
-      } as any;
-      const created = await photosAPI.createPhoto(photoData);
-
-      // Detect and store faces
-      try {
-        const formData = new FormData();
-        formData.append('file', blob, uploadUrlResponse.sanitizedFilename);
-        await facesAPI.detectAndStore(formData, created.id, userId);
-        // Debounced clustering
-        scheduleClusterRefresh();
-      } catch (faceErr: any) {
-        console.warn('Face detection failed/skipped:', faceErr?.message || String(faceErr));
-        scheduleClusterRefresh();
-      }
-
-      setPhotos(prev => [created, ...prev]);
-      Alert.alert('Success', 'Photo added to album');
+      const images = await pickImages(MULTI_PICK_LIMIT);
+      if (!images.length) return;
+      setUploadProgress({ current: 0, total: images.length });
+      const { uploadedPhotos } = await uploadPhotosBatch(userId, images, {
+        targetAlbumId: albumId,
+        onProgress: (current, total) => setUploadProgress({ current, total }),
+      });
+      scheduleClusterRefresh();
+      setPhotos(prev => [...uploadedPhotos, ...prev]);
+      const total = uploadedPhotos.length;
+      Alert.alert('Success', total === 1 ? 'Photo added to album' : `${total} photos added to album`);
     } catch (e: any) {
       Alert.alert('Upload failed', e?.message || 'Unable to upload');
     } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   };
 
   return (
     <View style={styles.container}>
+      {uploading && uploadProgress && (
+        <View style={styles.uploadProgressOverlay}>
+          <ActivityIndicator size="large" color="#fff" />
+          <Text style={styles.uploadProgressText}>
+            Uploading {uploadProgress.current}/{uploadProgress.total}
+          </Text>
+        </View>
+      )}
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack} style={styles.backBtn}><Text style={styles.backText}>‹</Text></TouchableOpacity>
         <Text style={styles.headerTitle}>{title}</Text>
@@ -150,6 +133,21 @@ const styles = StyleSheet.create({
   backText: { color: '#fff', fontSize: 24 },
   addBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
   addText: { color: '#fff', fontSize: 20 },
+  uploadProgressOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 80,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  uploadProgressText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginTop: 8,
+    fontWeight: '600',
+  },
 });
 
 export default AlbumDetailsScreen;

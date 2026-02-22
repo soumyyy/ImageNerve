@@ -7,8 +7,8 @@ Single source of truth for current user identity.
 """
 from fastapi import Request
 
-# One test user for development; all backend and frontend use this until real auth.
-TEST_USER_ID = "test-user-001"
+# One test user for development; must match frontend CURRENT_USER_ID (config/user.ts).
+TEST_USER_ID = "testuser"
 
 
 def get_current_user_id(request: Request) -> str:

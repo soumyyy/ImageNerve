@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform, Dimensions, FlatList, ListRenderItemInfo, Image as RNImage, Modal } from 'react-native';
 import { Animated } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useSharedValue, runOnJS } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { pickImage } from '../utils/imageUtils';
-import { getMimeType } from '../utils/fileUtils';
+import { pickImages, MULTI_PICK_LIMIT, type ImagePickerResult } from '../utils/imageUtils';
+import { uploadPhotosBatch } from '../utils/uploadPhotos';
 import { getCurrentUserId } from '../config/user';
 import { photosAPI, facesAPI, albumsAPI } from '../services/api';
 import { Photo, Album } from '../types';
@@ -34,6 +36,8 @@ const getPhotoItemWidth = () => {
   }
 };
 
+const scopeToggleWidth = 96; // fixed width for scope toggle — kept at module scope for StyleSheet
+
 interface DashboardScreenProps {
   onSettingsPress?: () => void;
 }
@@ -45,17 +49,25 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const [albumCounts, setAlbumCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [openAlbumId, setOpenAlbumId] = useState<string | null>(null);
   const [scope, setScope] = useState<'mine' | 'everyone'>('mine');
   const [tab, setTab] = useState<'photos' | 'albums'>('photos');
-  const numColumns = isWeb && isLargeScreen ? 6 : (isWeb ? 4 : 3);
+  // Dynamic columns — pinch gesture changes between 3, 5, 10
+  const COLUMN_STEPS = [3, 5, 10];
+  const [numColumns, setNumColumns] = useState(isWeb && isLargeScreen ? 6 : isWeb ? 4 : 3);
+  const pinchBaseScale = useSharedValue(1);
+  const pinchActiveScale = useSharedValue(1);
+  // Multi-select state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isSelecting, setIsSelecting] = useState(false);
   const [showNewAlbum, setShowNewAlbum] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
-  const [showAlbumPicker, setShowAlbumPicker] = useState<null | { photoId?: string; purpose: 'assign-existing' | 'upload-new' }>(null);
+  const [showAlbumPicker, setShowAlbumPicker] = useState<null | { photoId?: string; purpose: 'assign-existing' | 'upload-new' | 'upload-new-with-images' }>(null);
+  const pendingUploadImagesRef = useRef<ImagePickerResult[] | null>(null);
   const [showProfileFaceCta, setShowProfileFaceCta] = useState(false);
   const segmentAnim = React.useRef(new Animated.Value(0)).current;
-  const scopeToggleWidth = 96; // fixed width for floating toggle
   const INITIAL_PAGE_SIZE = 12;
   const PAGE_SIZE = 60;
   const [cursorBefore, setCursorBefore] = useState<string | null>(null);
@@ -243,19 +255,93 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
     } catch { }
   }, [userId]);
 
-  const renderPhotoItem = ({ item, index }: ListRenderItemInfo<Photo>) => (
-    <TouchableOpacity
-      key={item.id}
-      style={styles.photoItem}
-      activeOpacity={0.7}
-      onPress={() => handlePhotoPress(index)}
-    >
-      <PhotoImage photo={item} userId={userId} thumbnailOnly />
-    </TouchableOpacity>
-  );
+  // Pinch gesture — maps scale to column step [3,5,10]
+  const pinchGesture = Gesture.Pinch()
+    .onStart(() => {
+      pinchActiveScale.value = pinchBaseScale.value;
+    })
+    .onUpdate((e) => {
+      pinchActiveScale.value = pinchBaseScale.value * e.scale;
+    })
+    .onEnd(() => {
+      const s = pinchActiveScale.value;
+      // pinching in (scale < 1) → more columns, pinching out (scale > 1) → fewer
+      let newCols = numColumns;
+      if (s < 0.75 && numColumns < COLUMN_STEPS[COLUMN_STEPS.length - 1]) {
+        const idx = COLUMN_STEPS.indexOf(numColumns);
+        newCols = COLUMN_STEPS[Math.min(idx + 1, COLUMN_STEPS.length - 1)];
+      } else if (s > 1.35 && numColumns > COLUMN_STEPS[0]) {
+        const idx = COLUMN_STEPS.indexOf(numColumns);
+        newCols = COLUMN_STEPS[Math.max(idx - 1, 0)];
+      }
+      if (newCols !== numColumns) {
+        runOnJS(handleColumnChange)(newCols);
+      }
+      pinchBaseScale.value = 1;
+      pinchActiveScale.value = 1;
+    });
+
+  const handleColumnChange = useCallback((cols: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setNumColumns(cols);
+  }, []);
+
+  // Multi-select helpers
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const exitSelectionMode = useCallback(() => {
+    setIsSelecting(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const renderPhotoItem = useCallback(({ item, index }: ListRenderItemInfo<Photo>) => {
+    const isSelected = selectedIds.has(item.id);
+    return (
+      <TouchableOpacity
+        key={item.id}
+        style={[styles.photoItem, { width: screenWidth / numColumns, height: screenWidth / numColumns }]}
+        activeOpacity={isSelecting ? 0.6 : 0.85}
+        onPress={() => {
+          if (isSelecting) {
+            toggleSelect(item.id);
+          } else {
+            handlePhotoPress(index);
+          }
+        }}
+        onLongPress={() => {
+          if (!isSelecting) {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            setIsSelecting(true);
+            setSelectedIds(new Set([item.id]));
+          }
+        }}
+        delayLongPress={350}
+      >
+        <PhotoImage photo={item} userId={userId} thumbnailOnly />
+        {/* Selection overlay */}
+        {isSelecting && (
+          <View style={[styles.selectionOverlay, isSelected && styles.selectionOverlayActive]}>
+            {isSelected ? (
+              <View style={styles.selectionCheck}>
+                <Ionicons name="checkmark" size={14} color="#fff" />
+              </View>
+            ) : (
+              <View style={styles.selectionCircle} />
+            )}
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  }, [selectedIds, isSelecting, numColumns, userId]);
 
   const getItemLayout = (_: any, index: number) => {
-    const size = getPhotoItemWidth();
+    const size = screenWidth / numColumns;
     const row = Math.floor(index / numColumns);
     return { length: size, offset: row * size, index };
   };
@@ -263,254 +349,32 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const handlePhotoUpload = async (targetAlbumId?: string) => {
     try {
       setUploading(true);
-      console.log('📸 Starting photo upload process...');
-
-      // Pick image using cross-platform picker
-      const imageResult = await pickImage();
-      if (!imageResult) {
-        console.log('❌ No image selected');
-        return;
-      }
-      console.log('✅ Image selected:', imageResult.name, '| Type:', imageResult.type);
-
-      // Get presigned URL for S3 upload
-      console.log('🔐 Getting upload URL...');
-      const uploadUrlResponse = await photosAPI.getUploadUrl(imageResult.name, userId);
-      console.log('✅ Upload URL received | Sanitized filename:', uploadUrlResponse.sanitizedFilename);
-
-      // Create a temporary photo object for immediate display
-      const tempPhoto: Photo = {
-        id: `temp-${Date.now()}`,
-        user_id: userId,
-        s3_url: imageResult.uri, // Use local URI for immediate display
-        filename: uploadUrlResponse.sanitizedFilename,
-        tags: [],
-        uploaded_at: new Date().toISOString(),
-        description: 'Uploading...',
-        is_public: false,
-        photo_metadata: {
-          file_size: imageResult.size,
-          format: imageResult.type,
-          dimensions: 'Unknown',
-          uploaded_from: 'mobile_app',
-          upload_timestamp: new Date().toISOString(),
-        }
-      };
-
-      // Add temp photo to the beginning of the list for immediate display
-      setPhotos(prevPhotos => [tempPhoto, ...prevPhotos]);
-
-      // Prepare upload body with proper mime type
-      console.log('📦 Preparing upload body...');
-      let uploadBody;
-      const mimeType = getMimeType(imageResult.name);
-
-      if (Platform.OS === 'web') {
-        uploadBody = await fetch(imageResult.uri).then(r => r.blob());
-      } else {
-        const response = await fetch(imageResult.uri);
-        uploadBody = await response.blob();
-      }
-
-      // Upload to S3 with retries
-      console.log('☁️ Starting S3 upload:', {
-        filename: uploadUrlResponse.sanitizedFilename,
-        size: uploadBody.size,
-        type: mimeType
+      const images = await pickImages(MULTI_PICK_LIMIT);
+      if (!images.length) return;
+      setUploadProgress({ current: 0, total: images.length });
+      const { faceCount } = await uploadPhotosBatch(userId, images, {
+        targetAlbumId,
+        onProgress: (current, total) => setUploadProgress({ current, total }),
       });
-
-      let uploadSuccess = false;
-      const maxRetries = 3;
-      const startTime = Date.now();
-      let lastError = null;
-
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        const attemptStart = Date.now();
-        try {
-          // First verify the upload URL is valid
-          if (!uploadUrlResponse.upload_url) {
-            throw new Error('No upload URL provided');
-          }
-
-          // Attempt the upload with timeout
-          // Parse the presigned URL to get the base URL and query parameters
-          const presignedUrl = new URL(uploadUrlResponse.upload_url);
-          const baseUrl = `${presignedUrl.origin}${presignedUrl.pathname}`;
-          const queryParams = Object.fromEntries(presignedUrl.searchParams);
-
-          console.log('🔄 Uploading to:', {
-            baseUrl,
-            queryParams,
-            contentType: mimeType,
-            size: uploadBody.size
-          });
-
-          const response = await Promise.race([
-            fetch(uploadUrlResponse.upload_url, {
-              method: 'PUT',
-              body: uploadBody,
-              headers: {
-                'Content-Type': mimeType,
-              },
-              mode: 'cors',
-            }),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Upload timeout')), 30000)
-            )
-          ]) as Response;
-
-          const attemptDuration = (Date.now() - attemptStart) / 1000;
-
-          // Check response status
-          if (!response.ok) {
-            const errorText = await response.text().catch(() => 'No error details');
-            throw new Error(`Upload failed with status ${response.status}: ${errorText}`);
-          }
-
-          // Upload successful
-          console.log('✅ S3 upload successful:', {
-            attempt,
-            duration: attemptDuration.toFixed(2) + 's',
-            status: response.status,
-            size: uploadBody.size,
-          });
-
-          uploadSuccess = true;
-          break;
-
-        } catch (error: any) {
-          lastError = error;
-          const attemptDuration = (Date.now() - attemptStart) / 1000;
-
-          console.warn(`⚠️ Upload attempt ${attempt} failed:`, {
-            error: error.message,
-            duration: attemptDuration.toFixed(2) + 's'
-          });
-
-          if (attempt === maxRetries) {
-            console.error('❌ All upload attempts failed:', {
-              attempts: maxRetries,
-              finalError: error.message
-            });
-            throw new Error(`Failed to upload after ${maxRetries} attempts: ${error.message}`);
-          }
-
-          // Wait before retry with exponential backoff
-          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
-          console.log(`⏳ Waiting ${delay}ms before retry...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-      }
-
-      if (!uploadSuccess) {
-        throw new Error('Upload failed: ' + (lastError?.message || 'Unknown error'));
-      }
-
-      console.log('✅ S3 upload successful');
-
-      // Create photo record in database
-      console.log('🗄️ Creating photo record...', {
-        filename: uploadUrlResponse.sanitizedFilename,
-        url: uploadUrlResponse.file_url
-      });
-
-      // Extract basic metadata from the image
-      const imageMetadata = {
-        file_size: uploadBody.size,
-        format: mimeType,
-        dimensions: 'Unknown', // Will be extracted on backend if possible
-        uploaded_from: 'mobile_app',
-        upload_timestamp: new Date().toISOString(),
-      };
-
-      const photoData = {
-        user_id: userId,
-        s3_url: uploadUrlResponse.file_url,
-        filename: uploadUrlResponse.sanitizedFilename,
-        description: 'Uploaded from mobile app',
-        is_public: false,
-        album_ids: targetAlbumId ? [targetAlbumId] : undefined,
-        skip_default_album: !!targetAlbumId,
-        photo_metadata: imageMetadata,
-      };
-
-      let photo: Photo;
-      try {
-        photo = await photosAPI.createPhoto(photoData);
-        console.log('✅ Photo record created:', {
-          id: photo.id,
-          filename: photo.filename,
-          url: photo.s3_url
-        });
-
-        // Remove temp photo and add real photo
-        setPhotos(prevPhotos => {
-          const filteredPhotos = prevPhotos.filter(p => p.id !== tempPhoto.id);
-          return [photo, ...filteredPhotos];
-        });
-
-        // If an album was chosen, add photo to that album
-        if (targetAlbumId) {
-          try {
-            console.log('📚 Adding photo to album:', targetAlbumId);
-            await albumsAPI.addPhotosToAlbum(targetAlbumId, userId, [photo.id]);
-          } catch (albumErr) {
-            console.warn('⚠️ Failed to add photo to selected album:', albumErr);
-          }
-        }
-      } catch (error: any) {
-        console.error('❌ Failed to create photo record:', {
-          error: error.response?.data?.detail || error.message,
-          status: error.response?.status,
-          data: photoData
-        });
-        throw new Error(`Failed to create photo record: ${error.response?.data?.detail || error.message}`);
-      }
-
-      // Try to detect faces with retries
-      let faceCount = 0;
-      try {
-        console.log('🤖 Starting face detection...');
-        const formData = new FormData();
-
-        if (Platform.OS === 'web') {
-          const blob = await fetch(imageResult.uri).then(r => r.blob());
-          formData.append('file', blob, uploadUrlResponse.sanitizedFilename);
-        } else {
-          formData.append('file', {
-            uri: imageResult.uri,
-            type: mimeType,
-            name: uploadUrlResponse.sanitizedFilename,
-          } as any);
-        }
-
-        const faceResult = await facesAPI.detectAndStore(formData, photo.id, userId);
-        faceCount = faceResult.faces?.length || 0;
-        console.log('✅ Face detection completed | Faces found:', faceCount);
-        // Schedule debounced clustering to refresh People tab
-        scheduleClusterRefresh();
-      } catch (faceError: any) {
-        console.warn('⚠️ Face detection skipped:', faceError.message || faceError);
-        // Even if detection fails, still schedule clustering to keep state consistent
-        scheduleClusterRefresh();
-      }
-
+      scheduleClusterRefresh();
+      const total = images.length;
       Alert.alert(
         'Success!',
-        `Photo uploaded successfully!${faceCount > 0 ? ` Found ${faceCount} faces.` : ''}`
+        total === 1
+          ? `Photo uploaded.${faceCount > 0 ? ` Found ${faceCount} faces.` : ''}`
+          : `${total} photos uploaded.${faceCount > 0 ? ` Faces detected in some.` : ''}`,
       );
-
-      // Brief pause for S3 propagation then reload
-      await new Promise(resolve => setTimeout(resolve, 300));
-      console.log('🔄 Reloading photos...');
+      await new Promise((r) => setTimeout(r, 300));
       await loadUserData();
-
     } catch (error: any) {
       console.error('Upload error:', error);
-      const errorMessage = error.response?.data?.detail || error.message || 'Failed to upload photo. Please try again.';
-      Alert.alert('Upload Error', errorMessage);
+      Alert.alert(
+        'Upload Error',
+        error.response?.data?.detail || error.message || 'Failed to upload. Please try again.',
+      );
     } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   };
 
@@ -557,88 +421,115 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
       <View style={styles.header}>
         <Text style={styles.headerTitle}>ImageNerve</Text>
         <TouchableOpacity
-          style={styles.profileButton}
           onPress={onSettingsPress}
-          activeOpacity={0.7}
+          activeOpacity={0.6}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Text style={styles.profileButtonText}>⚙</Text>
+          <Ionicons name="settings-outline" size={24} color="rgba(255,255,255,0.75)" />
         </TouchableOpacity>
       </View>
 
       {/* Tabs */}
       {/* Removed top Photos/Albums toggle; now in header */}
 
-      {/* Floating minimal Me/Everyone toggle (icons only) */}
-      <View style={styles.floatingScopeToggle}>
-        <View style={styles.scopeToggleWrapper}>
-          <BlurView intensity={25} tint="dark" style={StyleSheet.absoluteFillObject} />
-          <Animated.View
-            style={[
-              styles.scopeHighlight,
-              {
-                width: scopeToggleWidth / 2,
-                transform: [
+      {/* Floating control row: Me/Everyone toggle (Photos tab only) + Add button */}
+      <View style={styles.floatingControls}>
+        {tab === 'photos' && (
+          <>
+            <View style={styles.controlPill}>
+              <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFillObject} />
+              <Animated.View
+                style={[
+                  styles.scopeHighlight,
                   {
-                    translateX: segmentAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0, scopeToggleWidth / 2],
-                    }),
+                    width: scopeToggleWidth / 2,
+                    transform: [
+                      {
+                        translateX: segmentAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0, scopeToggleWidth / 2],
+                        }),
+                      },
+                    ],
                   },
-                ],
-              },
-            ]}
-          />
-          <TouchableOpacity style={styles.scopeHalf} onPress={() => { setScope('mine'); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }} activeOpacity={0.9}>
-            <Ionicons name="person-outline" size={18} color={scope === 'mine' ? '#fff' : 'rgba(255,255,255,0.8)'} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.scopeHalf} onPress={() => { setScope('everyone'); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }} activeOpacity={0.9}>
-            <Ionicons name="people-outline" size={18} color={scope === 'everyone' ? '#fff' : 'rgba(255,255,255,0.8)'} />
-          </TouchableOpacity>
-        </View>
+                ]}
+              />
+              <TouchableOpacity style={styles.scopeHalf} onPress={() => { setScope('mine'); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }} activeOpacity={0.9}>
+                <Ionicons name="person" size={15} color={scope === 'mine' ? '#fff' : 'rgba(255,255,255,0.5)'} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.scopeHalf} onPress={() => { setScope('everyone'); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }} activeOpacity={0.9}>
+                <Ionicons name="people" size={15} color={scope === 'everyone' ? '#fff' : 'rgba(255,255,255,0.5)'} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.controlDivider} />
+          </>
+        )}
+        {/* Add button */}
+        <TouchableOpacity
+          style={[styles.addPillBtn, uploading && styles.buttonDisabled]}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            setShowAddMenu(true);
+          }}
+          activeOpacity={0.75}
+        >
+          <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFillObject} />
+          <Ionicons name="add" size={22} color="#fff" />
+        </TouchableOpacity>
       </View>
 
+      {uploading && uploadProgress && (
+        <View style={styles.uploadProgressOverlay}>
+          <ActivityIndicator size="large" color="#fff" />
+          <Text style={styles.uploadProgressText}>
+            Uploading {uploadProgress.current}/{uploadProgress.total}
+          </Text>
+        </View>
+      )}
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#ffffff" />
           <Text style={styles.loadingText}>Loading your photos...</Text>
         </View>
       ) : tab === 'photos' ? (
-        <FlatList
-          key={`photos_${numColumns}`}
-          data={photos}
-          renderItem={renderPhotoItem}
-          keyExtractor={(item) => item.id}
-          numColumns={numColumns}
-          removeClippedSubviews
-          initialNumToRender={24}
-          maxToRenderPerBatch={32}
-          windowSize={12}
-          updateCellsBatchingPeriod={50}
-          getItemLayout={getItemLayout}
-          onViewableItemsChanged={onViewableItemsChanged}
-          viewabilityConfig={viewabilityConfig}
-          inverted
-          contentContainerStyle={{ paddingTop: insets.bottom + 80, paddingBottom: 0, minHeight: 0, backgroundColor: '#000' }}
+        <GestureDetector gesture={pinchGesture}>
+          <FlatList
+            key={`photos_${numColumns}`}
+            data={photos}
+            renderItem={renderPhotoItem}
+            keyExtractor={(item) => item.id}
+            numColumns={numColumns}
+            removeClippedSubviews
+            initialNumToRender={24}
+            maxToRenderPerBatch={32}
+            windowSize={12}
+            updateCellsBatchingPeriod={50}
+            getItemLayout={getItemLayout}
+            onViewableItemsChanged={onViewableItemsChanged}
+            viewabilityConfig={viewabilityConfig}
+            inverted
+            contentContainerStyle={{ paddingTop: insets.bottom + 80, paddingBottom: 0, minHeight: 0, backgroundColor: '#000' }}
 
-          ListEmptyComponent={
-            showProfileFaceCta && scope === 'mine' ? (
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyText}>Set up “My Face”</Text>
-                <Text style={styles.emptySubtext}>Capture your face in Settings to personalize your Me tab.</Text>
-                <TouchableOpacity style={styles.ctaBtn} onPress={() => Alert.alert('Go to Settings', 'Open settings and tap “Capture My Face”.')}>
-                  <Text style={styles.ctaText}>Open Settings</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyText}>No Photos Yet</Text>
-                <Text style={styles.emptySubtext}>Tap the + button below to add your first photo</Text>
-              </View>
-            )
-          }
-          onEndReachedThreshold={0.3}
-          onEndReached={loadMore}
-        />
+            ListEmptyComponent={
+              showProfileFaceCta && scope === 'mine' ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyText}>Set up “My Face”</Text>
+                  <Text style={styles.emptySubtext}>Capture your face in Settings to personalize your Me tab.</Text>
+                  <TouchableOpacity style={styles.ctaBtn} onPress={() => Alert.alert('Go to Settings', 'Open settings and tap “Capture My Face”.')}>
+                    <Text style={styles.ctaText}>Open Settings</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyText}>No Photos Yet</Text>
+                  <Text style={styles.emptySubtext}>Tap the + button below to add your first photo</Text>
+                </View>
+              )
+            }
+            onEndReachedThreshold={0.3}
+            onEndReached={loadMore}
+          />
+        </GestureDetector>
       ) : (
         <FlatList
           key={`albums_${2}`}
@@ -659,55 +550,106 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
         />
       )}
 
-      {/* Floating Add Button — sits above the tab bar */}
-      <TouchableOpacity
-        style={[styles.floatingAddButton, uploading && styles.buttonDisabled, { bottom: Math.max(insets.bottom + 68, 80) }]}
-        onPress={() => {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          setShowAddMenu(true);
-        }}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.floatingAddButtonText}>+</Text>
-      </TouchableOpacity>
+      {/* Multi-select action bar */}
+      {isSelecting && (
+        <BlurView intensity={40} tint="dark" style={styles.selectionBar}>
+          <TouchableOpacity onPress={exitSelectionMode} style={styles.selectionBarBtn}>
+            <Ionicons name="close" size={22} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.selectionBarCount}>
+            {selectedIds.size} selected
+          </Text>
+          <View style={styles.selectionBarActions}>
+            <TouchableOpacity
+              style={styles.selectionBarBtn}
+              onPress={async () => {
+                if (!selectedIds.size) return;
+                setShowAlbumPicker({ purpose: 'assign-existing', photoId: [...selectedIds][0] });
+              }}
+            >
+              <Ionicons name="albums-outline" size={22} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.selectionBarBtn}
+              onPress={() => {
+                Alert.alert(
+                  'Delete Photos',
+                  `Delete ${selectedIds.size} photo${selectedIds.size > 1 ? 's' : ''}? This cannot be undone.`,
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Delete', style: 'destructive',
+                      onPress: async () => {
+                        const ids = [...selectedIds];
+                        exitSelectionMode();
+                        try {
+                          await Promise.all(ids.map(id => photosAPI.deletePhoto(id, userId)));
+                          setPhotos(prev => prev.filter(p => !ids.includes(p.id)));
+                        } catch { Alert.alert('Error', 'Some photos could not be deleted.'); }
+                      }
+                    }
+                  ]
+                );
+              }}
+            >
+              <Ionicons name="trash-outline" size={22} color="#ff4444" />
+            </TouchableOpacity>
+          </View>
+        </BlurView>
+      )}
 
-      {/* Liquid Glass Tab Bar */}
       <LiquidGlassTabBar
         activeTab={tab}
         onTabPress={setTab}
         bottomInset={insets.bottom}
       />
 
-      {/* Add Menu (Action Sheet) */}
+      {/* Add Menu (Action Sheet) — context-aware per tab */}
       <Modal visible={showAddMenu} transparent animationType="fade" onRequestClose={() => setShowAddMenu(false)}>
         <View style={styles.menuOverlay}>
           <View style={styles.menuCard}>
+
+            {/* Albums tab: show New Album option first */}
+            {tab === 'albums' && (
+              <>
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    setShowAddMenu(false);
+                    setTimeout(() => setShowNewAlbum(true), 300);
+                  }}
+                >
+                  <View style={styles.menuItemRow}>
+                    <Ionicons name="albums-outline" size={20} color="#fff" style={styles.menuItemIcon} />
+                    <Text style={styles.menuItemText}>New Album</Text>
+                  </View>
+                </TouchableOpacity>
+                <View style={styles.menuDivider} />
+              </>
+            )}
+
+            {/* Both tabs: Add Photo to Album — open picker first (no modal), then choose album */}
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => {
-                // Close menu first, then open create-album modal to avoid iOS modal stacking freeze
                 setShowAddMenu(false);
-                setTimeout(() => setShowNewAlbum(true), 300);
+                setTimeout(async () => {
+                  const images = await pickImages(MULTI_PICK_LIMIT);
+                  if (!images.length) return;
+                  pendingUploadImagesRef.current = images;
+                  setShowAlbumPicker({ purpose: 'upload-new-with-images' });
+                }, 300);
               }}
             >
-              <Text style={styles.menuItemText}>New Album</Text>
+              <View style={styles.menuItemRow}>
+                <Ionicons name="image-outline" size={20} color="#fff" style={styles.menuItemIcon} />
+                <Text style={styles.menuItemText}>Add Photo to Album</Text>
+              </View>
             </TouchableOpacity>
-            <View style={styles.menuDivider} />
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => {
-                // Close menu first, then open album picker to avoid iOS modal stacking freeze
-                setShowAddMenu(false);
-                setTimeout(() => setShowAlbumPicker({ purpose: 'upload-new' }), 300);
-              }}
-            >
-              <Text style={styles.menuItemText}>Add To Album</Text>
-            </TouchableOpacity>
+
             <TouchableOpacity
               style={[styles.menuItem, styles.menuCancel]}
-              onPress={() => {
-                setTimeout(() => setShowAddMenu(false), 0);
-              }}
+              onPress={() => setShowAddMenu(false)}
             >
               <Text style={[styles.menuItemText, styles.menuCancelText]}>Cancel</Text>
             </TouchableOpacity>
@@ -732,20 +674,48 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
       <AlbumPickerModal
         visible={!!showAlbumPicker}
         userId={userId}
-        defaultToMyPhotos={true}
+        defaultToMyPhotos={false}
         onClose={() => setShowAlbumPicker(null)}
         onPick={async (albumId) => {
-          try {
-            if (showAlbumPicker?.purpose === 'assign-existing') {
-              const photoId = showAlbumPicker?.photoId;
-              if (photoId) {
-                await albumsAPI.addPhotosToAlbum(albumId, userId, [photoId]);
-              }
-            } else if (showAlbumPicker?.purpose === 'upload-new') {
-              await handlePhotoUpload(albumId);
+          const purpose = showAlbumPicker?.purpose;
+          const photoId = showAlbumPicker?.photoId;
+          const imagesToUpload = purpose === 'upload-new-with-images' ? pendingUploadImagesRef.current : null;
+          pendingUploadImagesRef.current = null;
+          setShowAlbumPicker(null);
+          if (purpose === 'upload-new-with-images' && imagesToUpload?.length) {
+            try {
+              setUploading(true);
+              setUploadProgress({ current: 0, total: imagesToUpload.length });
+              const { faceCount } = await uploadPhotosBatch(userId, imagesToUpload, {
+                targetAlbumId: albumId,
+                onProgress: (current, total) => setUploadProgress({ current, total }),
+              });
+              scheduleClusterRefresh();
+              const total = imagesToUpload.length;
+              Alert.alert(
+                'Success!',
+                total === 1
+                  ? `Photo uploaded.${faceCount > 0 ? ` Found ${faceCount} faces.` : ''}`
+                  : `${total} photos uploaded.${faceCount > 0 ? ` Faces detected in some.` : ''}`,
+              );
+              await new Promise((r) => setTimeout(r, 300));
+              await loadUserData();
+            } catch (error: any) {
+              console.error('Upload error:', error);
+              Alert.alert(
+                'Upload Error',
+                error.response?.data?.detail || error.message || 'Failed to upload. Please try again.',
+              );
+            } finally {
+              setUploading(false);
+              setUploadProgress(null);
             }
-
-            // refresh previews
+            return;
+          }
+          try {
+            if (purpose === 'assign-existing' && photoId) {
+              await albumsAPI.addPhotosToAlbum(albumId, userId, [photoId]);
+            }
             const previews: Record<string, Photo[]> = {} as any;
             const userAlbums = await albumsAPI.getUserAlbums(userId, scope === 'everyone');
             setAlbums(userAlbums);
@@ -758,8 +728,6 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
             setAlbumPreviews(previews);
           } catch (e) {
             console.log('Album operation failed', e);
-          } finally {
-            setShowAlbumPicker(null);
           }
         }}
       />
@@ -790,15 +758,14 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   profileButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  profileButtonText: {
-    fontSize: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.15)',
   },
   content: {
     flex: 1,
@@ -832,23 +799,43 @@ const styles = StyleSheet.create({
   },
   headerTabText: { color: 'rgba(255,255,255,0.75)' },
   headerTabTextActive: { color: '#fff', fontWeight: '700' },
-  floatingScopeToggle: {
+  // Unified floating control row (scope toggle + add)
+  floatingControls: {
     position: 'absolute',
-    right: 16,
-    top: 52,
+    right: 14,
+    top: 50,
     zIndex: 10,
     elevation: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  scopeToggleWrapper: {
-    width: 96,
-    height: 36,
-    borderRadius: 18,
+  controlPill: {
+    width: scopeToggleWidth,
+    height: 34,
+    borderRadius: 17,
     overflow: 'hidden',
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.2)',
-    backgroundColor: 'rgba(0,0,0,0.35)'
+    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(0,0,0,0.25)',
+  },
+  controlDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 20,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+  },
+  addPillBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(0,0,0,0.25)',
   },
   scopeHighlight: {
     position: 'absolute',
@@ -907,6 +894,21 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.7)',
     marginTop: 12,
     fontWeight: '500',
+  },
+  uploadProgressOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  uploadProgressText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginTop: 8,
+    fontWeight: '600',
   },
   emptyState: {
     flex: 1,
@@ -1001,4 +1003,70 @@ const styles = StyleSheet.create({
   menuCancelText: {
     color: 'rgba(255,255,255,0.8)'
   },
-}); 
+  menuItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  menuItemIcon: {
+    opacity: 0.85,
+  },
+  // Selection overlay styles
+  selectionOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  selectionOverlayActive: {
+    backgroundColor: 'rgba(10,132,255,0.35)',
+  },
+  selectionCircle: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: '#fff',
+    backgroundColor: 'transparent',
+  },
+  selectionCheck: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#0a84ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // Selection action bar
+  selectionBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 60,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    zIndex: 30,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.12)',
+  },
+  selectionBarBtn: {
+    padding: 10,
+  },
+  selectionBarCount: {
+    flex: 1,
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  selectionBarActions: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+});

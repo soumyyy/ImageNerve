@@ -57,11 +57,13 @@ cd backend && source .venv/bin/activate && python -m uvicorn app.main:app --relo
 
 ## Auth & user (test user)
 
-Identity is centralized so real auth can be added later without scattering changes:
+Identity is centralized so real auth can be added later without scattering changes.
 
-- **Backend:** `app/auth/` defines `TEST_USER_ID` and `get_current_user_id(request)`. User is resolved from query `user_id`, header `X-User-Id`, or the test user. Photo service ensures the test user exists in the DB when needed; request logging uses the resolved user.
-- **Frontend:** `src/config/user.ts` exports `CURRENT_USER_ID` and `getCurrentUserId()`. All screens and API calls use this; no hardcoded user ids elsewhere.
-- To switch to real auth: replace `get_current_user_id` (e.g. with JWT) and the frontend config (e.g. with an auth context) in these two places.
+**Single source of truth:** The test user ID is **`testuser`**. It must match in both places; do not hardcode it elsewhere.
+
+- **Backend:** `backend/app/auth/current_user.py` defines `TEST_USER_ID = "testuser"` and `get_current_user_id(request)`. User is resolved from query `user_id`, header `X-User-Id`, or `TEST_USER_ID`. Photo service ensures the test user exists in the DB when needed.
+- **Frontend:** `ImageNerveExpo/src/config/user.ts` exports `CURRENT_USER_ID = 'testuser'` and `getCurrentUserId()`. All screens and API calls must use `getCurrentUserId()`; no hardcoded user IDs elsewhere.
+- To switch to real auth: replace `get_current_user_id` (e.g. with JWT) and the frontend config (e.g. with an auth context) in these two files only.
 
 ## Photo uploads & S3
 
@@ -102,6 +104,40 @@ Photo uploads use a presigned S3 URL: the app requests an upload URL from the ba
 - AWS S3 for file storage
 - Supabase for database
 - Comprehensive logging 
+
+## Dependencies (Expo 54)
+
+The frontend is pinned to **Expo SDK 54** with **React Native 0.81.5** and **React 19.1.0**. Do **not** run `npm audit fix --force`; it will downgrade Expo to 51 and change React Native to 0.84, which breaks the project. Use `npm install` and keep the versions in `package.json`. Remaining audit warnings are from transitive dependencies in the Expo/React Native ecosystem and are not safely fixable without breaking the stack.
+
+## Troubleshooting: Expo / Metro not starting
+
+If `npx expo start` or `npm start` hangs at **"Starting project at ..."** with no QR code or "Metro waiting on" message:
+
+1. **Wait 60–90 seconds** – First start can be slow while Metro builds the cache.
+2. **Clear caches and try again:**
+   ```bash
+   cd ImageNerveExpo
+   rm -rf .expo node_modules/.cache
+   rm -rf $TMPDIR/metro-cache 2>/dev/null
+   npx expo start -c
+   ```
+3. **Fix npm "devdir" warning** (can cause slowness):
+   ```bash
+   npm config delete devdir
+   ```
+4. **If you use a VPN or corporate proxy** – Try disconnecting or run:
+   ```bash
+   HTTP_PROXY= HTTPS_PROXY= npx expo start -c --localhost
+   ```
+5. **Full reset** (if it still hangs):
+   ```bash
+   cd ImageNerveExpo
+   rm -rf node_modules .expo
+   npm cache clean --force
+   npm install
+   npx expo start -c
+   ```
+6. **Check project setup:** `npx expo-doctor` (install with `npm install -g expo-doctor` if needed).
 
 ## 📖 Documentation
 

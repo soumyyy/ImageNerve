@@ -16,17 +16,20 @@ const AlbumPickerModal: React.FC<AlbumPickerModalProps> = ({ visible, userId, on
   const [loading, setLoading] = useState(false);
   const [showNew, setShowNew] = useState(false);
 
+  const MY_PHOTOS_ALBUM_NAME = 'My Photos';
+
   useEffect(() => {
     if (!visible) return;
     (async () => {
       setLoading(true);
       try {
         const res = await albumsAPI.getUserAlbums(userId, false);
-        setAlbums(res);
+        // Exclude "My Photos" – it's auto-generated from face scans and not a valid target for adding photos
+        const pickableAlbums = (res || []).filter((a: any) => a.name !== MY_PHOTOS_ALBUM_NAME);
+        setAlbums(pickableAlbums);
         if (defaultToMyPhotos) {
-          const my = res.find((a: any) => a.name === 'My Photos');
+          const my = res.find((a: any) => a.name === MY_PHOTOS_ALBUM_NAME);
           if (my) {
-            // Close first, then notify selection after a short delay to avoid iOS modal conflicts
             onClose();
             setTimeout(() => onPick(my.id), 450);
             return;
