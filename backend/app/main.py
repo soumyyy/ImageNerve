@@ -50,4 +50,5 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(apiRouter) 
+app.include_router(apiRouter)
+print("ImageNerve backend loaded. Uvicorn will start shortly.", flush=True) 

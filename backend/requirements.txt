@@ -10,3 +10,4 @@ geoalchemy2
 sqlalchemy
 Pillow
 requests
+opencv-python

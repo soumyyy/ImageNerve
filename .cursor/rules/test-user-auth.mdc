@@ -4,7 +4,7 @@ globs:
 alwaysApply: true
 ---
 - **Test user ID** is `testuser`. It is defined in exactly two places and must match:
-  - Frontend: `ImageNerveExpo/src/config/user.ts` → `CURRENT_USER_ID` and `getCurrentUserId()`
+  - Frontend: `frontend/src/config/user.ts` → `CURRENT_USER_ID` and `getCurrentUserId()`
   - Backend: `backend/app/auth/current_user.py` → `TEST_USER_ID` and `get_current_user_id(request)`
 - **Frontend:** Never hardcode `"testuser"`, `"test-user-001"`, or any user ID in screens, components, or API calls. Always use `getCurrentUserId()` from `../config/user` (or pass `userId` from a parent that got it via `getCurrentUserId()`).
 - **Backend:** Never hardcode a user ID in routes or services. Use `get_current_user_id(request)` for request-scoped user, or import `TEST_USER_ID` from `app.auth` only when comparing (e.g. ensuring test user exists). All user_id values in API calls come from the client or fall back to `TEST_USER_ID` in `get_current_user_id`.

@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform, Dimensions, FlatList, ListRenderItemInfo, Image as RNImage, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform, Dimensions, FlatList, ListRenderItemInfo, Image as RNImage, Modal, Share } from 'react-native';
 import { Animated } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSharedValue, runOnJS } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
+import * as Sharing from 'expo-sharing';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { pickImages, MULTI_PICK_LIMIT, type ImagePickerResult } from '../utils/imageUtils';
 import { uploadPhotosBatch } from '../utils/uploadPhotos';
@@ -36,7 +39,8 @@ const getPhotoItemWidth = () => {
   }
 };
 
-const scopeToggleWidth = 96; // fixed width for scope toggle — kept at module scope for StyleSheet
+const scopeToggleWidth = 96;
+const COLUMN_STEPS = [3, 5, 10]; // module-scope so worklets can see it
 
 interface DashboardScreenProps {
   onSettingsPress?: () => void;
@@ -54,9 +58,11 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const [openAlbumId, setOpenAlbumId] = useState<string | null>(null);
   const [scope, setScope] = useState<'mine' | 'everyone'>('mine');
   const [tab, setTab] = useState<'photos' | 'albums'>('photos');
-  // Dynamic columns — pinch gesture changes between 3, 5, 10
-  const COLUMN_STEPS = [3, 5, 10];
-  const [numColumns, setNumColumns] = useState(isWeb && isLargeScreen ? 6 : isWeb ? 4 : 3);
+  // Dynamic columns — pinch gesture changes between steps in COLUMN_STEPS
+  const defaultCols = isWeb && isLargeScreen ? 6 : isWeb ? 4 : 3;
+  const defaultIdx = COLUMN_STEPS.indexOf(defaultCols) !== -1 ? COLUMN_STEPS.indexOf(defaultCols) : 0;
+  const [numColumns, setNumColumns] = useState(defaultCols);
+  const colIdxSv = useSharedValue(defaultIdx); // mirrors numColumns index — worklet-safe
   const pinchBaseScale = useSharedValue(1);
   const pinchActiveScale = useSharedValue(1);
   // Multi-select state
@@ -68,6 +74,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   const pendingUploadImagesRef = useRef<ImagePickerResult[] | null>(null);
   const [showProfileFaceCta, setShowProfileFaceCta] = useState(false);
   const segmentAnim = React.useRef(new Animated.Value(0)).current;
+  const selectionBarAnim = React.useRef(new Animated.Value(0)).current;
   const INITIAL_PAGE_SIZE = 12;
   const PAGE_SIZE = 60;
   const [cursorBefore, setCursorBefore] = useState<string | null>(null);
@@ -87,6 +94,20 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
       useNativeDriver: true,
     }).start();
   }, [scope]);
+
+  useEffect(() => {
+    Animated.spring(selectionBarAnim, {
+      toValue: isSelecting ? 1 : 0,
+      useNativeDriver: true,
+      tension: 80,
+      friction: 12,
+    }).start();
+  }, [isSelecting]);
+
+  // Exit selection mode when switching away from photos tab
+  useEffect(() => {
+    if (tab !== 'photos') exitSelectionMode();
+  }, [tab]);
 
   const testAPIConnection = async () => {
     try {
@@ -255,27 +276,28 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
     } catch { }
   }, [userId]);
 
-  // Pinch gesture — maps scale to column step [3,5,10]
+  // Pinch gesture — all math uses shared values, safe on UI thread
   const pinchGesture = Gesture.Pinch()
     .onStart(() => {
-      pinchActiveScale.value = pinchBaseScale.value;
+      pinchActiveScale.value = 1;
     })
     .onUpdate((e) => {
-      pinchActiveScale.value = pinchBaseScale.value * e.scale;
+      pinchActiveScale.value = e.scale;
     })
-    .onEnd(() => {
-      const s = pinchActiveScale.value;
-      // pinching in (scale < 1) → more columns, pinching out (scale > 1) → fewer
-      let newCols = numColumns;
-      if (s < 0.75 && numColumns < COLUMN_STEPS[COLUMN_STEPS.length - 1]) {
-        const idx = COLUMN_STEPS.indexOf(numColumns);
-        newCols = COLUMN_STEPS[Math.min(idx + 1, COLUMN_STEPS.length - 1)];
-      } else if (s > 1.35 && numColumns > COLUMN_STEPS[0]) {
-        const idx = COLUMN_STEPS.indexOf(numColumns);
-        newCols = COLUMN_STEPS[Math.max(idx - 1, 0)];
+    .onEnd((e) => {
+      const s = e.scale;
+      const currentIdx = colIdxSv.value;
+      const maxIdx = COLUMN_STEPS.length - 1;
+      let newIdx = currentIdx;
+      // pinch in (scale < 1) → more columns; pinch out (scale > 1) → fewer
+      if (s < 0.8 && currentIdx < maxIdx) {
+        newIdx = currentIdx + 1;
+      } else if (s > 1.25 && currentIdx > 0) {
+        newIdx = currentIdx - 1;
       }
-      if (newCols !== numColumns) {
-        runOnJS(handleColumnChange)(newCols);
+      if (newIdx !== currentIdx) {
+        colIdxSv.value = newIdx;
+        runOnJS(handleColumnChange)(COLUMN_STEPS[newIdx]);
       }
       pinchBaseScale.value = 1;
       pinchActiveScale.value = 1;
@@ -299,6 +321,116 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
     setIsSelecting(false);
     setSelectedIds(new Set());
   }, []);
+
+  const handleSelectAll = useCallback(() => {
+    if (selectedIds.size === photos.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(photos.map((p) => p.id)));
+    }
+  }, [selectedIds.size, photos]);
+
+  const handleMultiDelete = useCallback(() => {
+    if (!selectedIds.size) return;
+    Alert.alert(
+      'Delete Photos',
+      `Delete ${selectedIds.size} photo${selectedIds.size > 1 ? 's' : ''}? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete', style: 'destructive',
+          onPress: async () => {
+            const ids = [...selectedIds];
+            exitSelectionMode();
+            try {
+              await Promise.all(ids.map((id) => photosAPI.deletePhoto(id, userId)));
+              setPhotos((prev) => prev.filter((p) => !ids.includes(p.id)));
+            } catch {
+              Alert.alert('Error', 'Some photos could not be deleted.');
+            }
+          },
+        },
+      ]
+    );
+  }, [selectedIds, userId, exitSelectionMode]);
+
+  const handleShare = useCallback(async () => {
+    if (!selectedIds.size) return;
+    const ids = [...selectedIds];
+
+    if (Platform.OS === 'web') {
+      for (const id of ids) {
+        const photo = photos.find((p) => p.id === id);
+        if (!photo) continue;
+        window.open(photosAPI.getWebDownloadStreamUrl(photo.filename), '_blank');
+      }
+      exitSelectionMode();
+      return;
+    }
+
+    exitSelectionMode();
+    const photo = photos.find((p) => p.id === ids[0]);
+    if (!photo) return;
+    try {
+      const { url } = await photosAPI.getDownloadUrl(photo.filename, userId);
+      const cacheDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? '';
+      const tmpPath = `${cacheDir}${photo.filename}`;
+      const { uri } = await FileSystem.downloadAsync(url, tmpPath);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'image/jpeg', dialogTitle: 'Share Photo' });
+      } else {
+        await Share.share({ url });
+      }
+    } catch (e: any) {
+      if (e?.message !== 'The user did not share') {
+        Alert.alert('Share failed', e?.message || 'Unable to share');
+      }
+    }
+  }, [selectedIds, photos, userId, exitSelectionMode]);
+
+  const handleMultiDownload = async () => {
+    if (!selectedIds.size) return;
+    const ids = [...selectedIds];
+
+    if (Platform.OS === 'web') {
+      // Web: trigger anchor-download for each selected photo via the backend stream proxy
+      for (const id of ids) {
+        const photo = photos.find((p) => p.id === id);
+        if (!photo) continue;
+        const streamUrl = photosAPI.getWebDownloadStreamUrl(photo.filename);
+        const a = document.createElement('a');
+        a.href = streamUrl;
+        a.download = photo.filename || 'image.jpg';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+      exitSelectionMode();
+      return;
+    }
+
+    exitSelectionMode();
+    const perm = await MediaLibrary.requestPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Permission required', 'Allow access to your photo library to save photos.');
+      return;
+    }
+    let saved = 0;
+    for (const id of ids) {
+      const photo = photos.find((p) => p.id === id);
+      if (!photo) continue;
+      try {
+        const { url } = await photosAPI.getDownloadUrl(photo.filename, userId);
+        const cacheDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? '';
+        const tmpPath = `${cacheDir}${photo.filename}`;
+        const { uri } = await FileSystem.downloadAsync(url, tmpPath);
+        const asset = await MediaLibrary.createAssetAsync(uri);
+        await MediaLibrary.createAlbumAsync('ImageNerve', asset, false);
+        saved++;
+      } catch { }
+    }
+    Alert.alert('Downloaded', `${saved} of ${ids.length} photo${ids.length !== 1 ? 's' : ''} saved to your library.`);
+  };
 
   const renderPhotoItem = useCallback(({ item, index }: ListRenderItemInfo<Photo>) => {
     const isSelected = selectedIds.has(item.id);
@@ -326,15 +458,19 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
         <PhotoImage photo={item} userId={userId} thumbnailOnly />
         {/* Selection overlay */}
         {isSelecting && (
-          <View style={[styles.selectionOverlay, isSelected && styles.selectionOverlayActive]}>
-            {isSelected ? (
-              <View style={styles.selectionCheck}>
-                <Ionicons name="checkmark" size={14} color="#fff" />
-              </View>
-            ) : (
-              <View style={styles.selectionCircle} />
-            )}
-          </View>
+          <>
+            {!isSelected && <View style={styles.selectionDim} />}
+            {isSelected && <View style={styles.selectionOverlayActive} />}
+            <View style={styles.selectionCheckArea}>
+              {isSelected ? (
+                <View style={styles.selectionCheck}>
+                  <Ionicons name="checkmark" size={13} color="#fff" />
+                </View>
+              ) : (
+                <View style={styles.selectionCircle} />
+              )}
+            </View>
+          </>
         )}
       </TouchableOpacity>
     );
@@ -419,14 +555,43 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
   return (
     <SafeAreaView style={styles.container} edges={[]}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>ImageNerve</Text>
-        <TouchableOpacity
-          onPress={onSettingsPress}
-          activeOpacity={0.6}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Ionicons name="settings-outline" size={24} color="rgba(255,255,255,0.75)" />
-        </TouchableOpacity>
+        {isSelecting ? (
+          <>
+            <TouchableOpacity onPress={exitSelectionMode} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={styles.headerActionBtn}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.headerSelectionCount}>
+              {selectedIds.size === 0 ? 'Select Items' : `${selectedIds.size} Selected`}
+            </Text>
+            <TouchableOpacity onPress={handleSelectAll} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={styles.headerActionBtn}>
+                {selectedIds.size === photos.length && photos.length > 0 ? 'Deselect All' : 'Select All'}
+              </Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <Text style={styles.headerTitle}>ImageNerve</Text>
+            <View style={styles.headerRight}>
+              {tab === 'photos' && (
+                <TouchableOpacity
+                  onPress={() => setIsSelecting(true)}
+                  activeOpacity={0.6}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Text style={styles.headerActionBtn}>Select</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                onPress={onSettingsPress}
+                activeOpacity={0.6}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons name="settings-outline" size={24} color="rgba(255,255,255,0.75)" />
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
       </View>
 
       {/* Tabs */}
@@ -508,7 +673,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
             onViewableItemsChanged={onViewableItemsChanged}
             viewabilityConfig={viewabilityConfig}
             inverted
-            contentContainerStyle={{ paddingTop: insets.bottom + 80, paddingBottom: 0, minHeight: 0, backgroundColor: '#000' }}
+            contentContainerStyle={{ paddingTop: insets.bottom + (isSelecting ? 110 : 80), paddingBottom: 0, minHeight: 0, backgroundColor: '#000' }}
 
             ListEmptyComponent={
               showProfileFaceCta && scope === 'mine' ? (
@@ -550,53 +715,51 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSettingsPres
         />
       )}
 
-      {/* Multi-select action bar */}
-      {isSelecting && (
-        <BlurView intensity={40} tint="dark" style={styles.selectionBar}>
-          <TouchableOpacity onPress={exitSelectionMode} style={styles.selectionBarBtn}>
-            <Ionicons name="close" size={22} color="#fff" />
+      {/* Apple Photos-style bottom selection action bar */}
+      <Animated.View
+        pointerEvents={isSelecting ? 'auto' : 'none'}
+        style={[
+          styles.selectionActionBar,
+          {
+            paddingBottom: insets.bottom,
+            opacity: selectionBarAnim,
+            transform: [{
+              translateY: selectionBarAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [120, 0],
+              }),
+            }],
+          },
+        ]}
+      >
+        <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFillObject} />
+        <View style={styles.selectionActionBarBorder} />
+        <View style={styles.selectionActions}>
+          <TouchableOpacity style={styles.selectionAction} onPress={handleShare} disabled={selectedIds.size === 0}>
+            <Ionicons name="share-outline" size={26} color={selectedIds.size === 0 ? 'rgba(255,255,255,0.3)' : '#fff'} />
+            <Text style={[styles.selectionActionLabel, selectedIds.size === 0 && styles.selectionActionLabelDim]}>Share</Text>
           </TouchableOpacity>
-          <Text style={styles.selectionBarCount}>
-            {selectedIds.size} selected
-          </Text>
-          <View style={styles.selectionBarActions}>
-            <TouchableOpacity
-              style={styles.selectionBarBtn}
-              onPress={async () => {
-                if (!selectedIds.size) return;
-                setShowAlbumPicker({ purpose: 'assign-existing', photoId: [...selectedIds][0] });
-              }}
-            >
-              <Ionicons name="albums-outline" size={22} color="#fff" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.selectionBarBtn}
-              onPress={() => {
-                Alert.alert(
-                  'Delete Photos',
-                  `Delete ${selectedIds.size} photo${selectedIds.size > 1 ? 's' : ''}? This cannot be undone.`,
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Delete', style: 'destructive',
-                      onPress: async () => {
-                        const ids = [...selectedIds];
-                        exitSelectionMode();
-                        try {
-                          await Promise.all(ids.map(id => photosAPI.deletePhoto(id, userId)));
-                          setPhotos(prev => prev.filter(p => !ids.includes(p.id)));
-                        } catch { Alert.alert('Error', 'Some photos could not be deleted.'); }
-                      }
-                    }
-                  ]
-                );
-              }}
-            >
-              <Ionicons name="trash-outline" size={22} color="#ff4444" />
-            </TouchableOpacity>
-          </View>
-        </BlurView>
-      )}
+          <TouchableOpacity style={styles.selectionAction} onPress={handleMultiDownload} disabled={selectedIds.size === 0}>
+            <Ionicons name="arrow-down-circle-outline" size={26} color={selectedIds.size === 0 ? 'rgba(255,255,255,0.3)' : '#fff'} />
+            <Text style={[styles.selectionActionLabel, selectedIds.size === 0 && styles.selectionActionLabelDim]}>Save</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.selectionAction}
+            onPress={() => {
+              if (!selectedIds.size) return;
+              setShowAlbumPicker({ purpose: 'assign-existing', photoId: [...selectedIds][0] });
+            }}
+            disabled={selectedIds.size === 0}
+          >
+            <Ionicons name="albums-outline" size={26} color={selectedIds.size === 0 ? 'rgba(255,255,255,0.3)' : '#fff'} />
+            <Text style={[styles.selectionActionLabel, selectedIds.size === 0 && styles.selectionActionLabelDim]}>Album</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.selectionAction} onPress={handleMultiDelete} disabled={selectedIds.size === 0}>
+            <Ionicons name="trash-outline" size={26} color={selectedIds.size === 0 ? 'rgba(255,59,48,0.3)' : '#ff3b30'} />
+            <Text style={[styles.selectionActionLabel, { color: selectedIds.size === 0 ? 'rgba(255,59,48,0.3)' : '#ff3b30' }]}>Delete</Text>
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
 
       <LiquidGlassTabBar
         activeTab={tab}
@@ -1012,61 +1175,88 @@ const styles = StyleSheet.create({
     opacity: 0.85,
   },
   // Selection overlay styles
-  selectionOverlay: {
+  selectionDim: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: 'rgba(0,0,0,0.35)',
   },
   selectionOverlayActive: {
-    backgroundColor: 'rgba(10,132,255,0.35)',
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(10,132,255,0.22)',
+  },
+  selectionCheckArea: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
   },
   selectionCircle: {
-    position: 'absolute',
-    top: 6,
-    left: 6,
     width: 22,
     height: 22,
     borderRadius: 11,
     borderWidth: 2,
-    borderColor: '#fff',
-    backgroundColor: 'transparent',
+    borderColor: 'rgba(255,255,255,0.85)',
+    backgroundColor: 'rgba(0,0,0,0.25)',
   },
   selectionCheck: {
-    position: 'absolute',
-    top: 6,
-    left: 6,
     width: 22,
     height: 22,
     borderRadius: 11,
     backgroundColor: '#0a84ff',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#0a84ff',
   },
-  // Selection action bar
-  selectionBar: {
+  // Apple Photos-style bottom action bar
+  selectionActionBar: {
     position: 'absolute',
-    top: 0,
+    bottom: 0,
     left: 0,
     right: 0,
-    height: 60,
+    zIndex: 25,
+    overflow: 'hidden',
+  },
+  selectionActionBarBorder: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  selectionActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 8,
+    paddingHorizontal: 8,
+  },
+  selectionAction: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 4,
+  },
+  selectionActionLabel: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '500',
+    letterSpacing: 0.1,
+  },
+  selectionActionLabelDim: {
+    color: 'rgba(255,255,255,0.3)',
+  },
+  // Header additions
+  headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    zIndex: 30,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(255,255,255,0.12)',
+    gap: 14,
   },
-  selectionBarBtn: {
-    padding: 10,
+  headerActionBtn: {
+    color: '#0a84ff',
+    fontSize: 15,
+    fontWeight: '500',
   },
-  selectionBarCount: {
-    flex: 1,
+  headerSelectionCount: {
     color: '#fff',
+    fontSize: 15,
     fontWeight: '600',
-    fontSize: 16,
-    textAlign: 'center',
-  },
-  selectionBarActions: {
-    flexDirection: 'row',
-    gap: 4,
   },
 });

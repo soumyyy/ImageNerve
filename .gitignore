@@ -1,51 +1,53 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+# Dependencies
+frontend/node_modules/
 
-# dependencies
-ImageNerveExpo/node_modules/
-
-# Expo
-ImageNerveExpo/.expo/
-ImageNerveExpo/dist/
-ImageNerveExpo/web-build/
-ImageNerveExpo/expo-env.d.ts
-
-# Native
-ImageNerveExpo/.kotlin/
-ImageNerveExpo/*.orig.*
-ImageNerveExpo/*.jks
-ImageNerveExpo/*.p8
-ImageNerveExpo/*.p12
-ImageNerveExpo/*.key
-ImageNerveExpo/*.mobileprovision
-
-# Metro
+# Expo / Metro
+frontend/.expo/
+frontend/dist/
+frontend/web-build/
+frontend/expo-env.d.ts
 .metro-health-check*
 
-# debug
+# Native build artifacts
+frontend/.kotlin/
+frontend/*.orig.*
+frontend/*.jks
+frontend/*.p8
+frontend/*.p12
+frontend/*.key
+frontend/*.mobileprovision
+
+# Python
+backend/.venv/
+backend/.env
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Backend
+backend/logs/
+backend/models/
+backend/testImages/
+
+# Build / cache
+*.tsbuildinfo
+.cache/
+
+# Debug
 npm-debug.*
 yarn-debug.*
 yarn-error.*
 
-# macOS
+# OS
 .DS_Store
 *.pem
+Thumbs.db
 
-# local env files
-backend/.env
-backend/.venv/
-
-#backend
-backend/app/routes/
-backend/app/__pycache__
-backend/app/services/__pycache__/
-backend/app/models/__pycache__  
-backend/testImages/
-backend/models/
-backend/logs/
-backend/app/utils/__pycache__
-backend/app/database/__pycache__
-
-# typescript
-*.tsbuildinfo
-
-
+# Cursor
+.cursor/

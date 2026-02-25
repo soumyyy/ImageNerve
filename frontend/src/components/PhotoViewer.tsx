@@ -8,6 +8,7 @@ import {
   ScrollView,
   Alert,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -46,7 +47,10 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
   onDeleted,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const [localPhotos, setLocalPhotos] = useState<Photo[]>(photos);
   const [showMetadata, setShowMetadata] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
   const scale = useSharedValue(1);
@@ -55,9 +59,9 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
   const [dockHeight, setDockHeight] = useState(0);
 
   // Update currentPhoto when currentIndex changes
-  const currentPhoto = photos[currentIndex];
-  const nextPhoto = currentIndex < photos.length - 1 ? photos[currentIndex + 1] : null;
-  const prevPhoto = currentIndex > 0 ? photos[currentIndex - 1] : null;
+  const currentPhoto = localPhotos[currentIndex];
+  const nextPhoto = currentIndex < localPhotos.length - 1 ? localPhotos[currentIndex + 1] : null;
+  const prevPhoto = currentIndex > 0 ? localPhotos[currentIndex - 1] : null;
 
   // Reset metadata panel when photo changes
   useEffect(() => {
@@ -80,17 +84,17 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
   };
 
   // Shared values for gesture — all worklet-safe (no React state in worklets)
-  const hasNext = useSharedValue(currentIndex < photos.length - 1);
+  const hasNext = useSharedValue(currentIndex < localPhotos.length - 1);
   const hasPrev = useSharedValue(currentIndex > 0);
 
   // Keep shared boundary values in sync with index changes
   useEffect(() => {
-    hasNext.value = currentIndex < photos.length - 1;
+    hasNext.value = currentIndex < localPhotos.length - 1;
     hasPrev.value = currentIndex > 0;
-  }, [currentIndex, photos.length]);
+  }, [currentIndex, localPhotos.length]);
 
   const changeIndex = useCallback((direction: 'next' | 'prev') => {
-    if (direction === 'next' && currentIndex < photos.length - 1) {
+    if (direction === 'next' && currentIndex < localPhotos.length - 1) {
       setCurrentIndex((prev) => prev + 1);
       translateX.value = screenWidth;
       translateX.value = withSpring(0, { damping: 20, stiffness: 90, mass: 0.5 });
@@ -101,7 +105,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
     } else {
       translateX.value = withSpring(0, { damping: 20, stiffness: 90, mass: 0.5 });
     }
-  }, [currentIndex, photos.length]);
+  }, [currentIndex, localPhotos.length]);
 
   const panGesture = Gesture.Pan()
     .activeOffsetX([-8, 8])
@@ -173,28 +177,29 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
   });
 
   const handleDownload = async () => {
+    if (isDownloading) return;
+    setIsDownloading(true);
     try {
-      console.log('⬇️ Download requested for index', currentIndex, 'photo', currentPhoto?.id, currentPhoto?.filename);
       const filename = currentPhoto.filename;
-      const { url } = await photosAPI.getDownloadUrl(filename, userId);
-      console.log('Download URL received:', url);
       if (Platform.OS === 'web') {
-        // Web: download via backend proxy to avoid S3 CORS
         const streamUrl = photosAPI.getWebDownloadStreamUrl(filename);
-        const objectUrl = streamUrl; // Let browser handle streaming download
         const a = document.createElement('a');
-        a.href = objectUrl;
+        a.href = streamUrl;
         a.download = filename || 'image.jpg';
         document.body.appendChild(a);
         a.click();
         a.remove();
         return;
       }
-      // @ts-ignore
-      const tmpPath = `${FileSystem.cacheDirectory}${filename}`;
-      const { uri } = await FileSystem.downloadAsync(url, tmpPath);
       const perm = await MediaLibrary.requestPermissionsAsync();
-      if (!perm.granted) throw new Error('Media Library permission denied');
+      if (!perm.granted) {
+        Alert.alert('Permission required', 'Allow access to your photo library to save photos.');
+        return;
+      }
+      const { url } = await photosAPI.getDownloadUrl(filename, userId);
+      const cacheDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? '';
+      const tmpPath = `${cacheDir}${filename}`;
+      const { uri } = await FileSystem.downloadAsync(url, tmpPath);
       const asset = await MediaLibrary.createAssetAsync(uri);
       await MediaLibrary.createAlbumAsync('ImageNerve', asset, false);
       Alert.alert('Saved', 'Photo saved to your library.');
@@ -202,58 +207,55 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
       console.error('Download error:', e);
       if (Platform.OS === 'ios' && await Sharing.isAvailableAsync()) {
         try {
-          const filename = currentPhoto.filename;
-          const { url } = await photosAPI.getDownloadUrl(filename, userId);
+          const { url } = await photosAPI.getDownloadUrl(currentPhoto.filename, userId);
           await Sharing.shareAsync(url);
           return;
         } catch { }
       }
       Alert.alert('Download failed', e?.message || 'Unable to save photo');
+    } finally {
+      setIsDownloading(false);
     }
   };
 
   const handleDelete = () => {
-    console.log('🗑️ Delete requested for index', currentIndex, 'photo', currentPhoto?.id);
+    if (isDeleting) return;
 
     const performDelete = async () => {
+      setIsDeleting(true);
       try {
-        console.log('Calling delete API...');
         await photosAPI.deletePhoto(currentPhoto.id, userId);
-        if (Platform.OS !== 'web') {
-          Alert.alert('Deleted', 'Photo has been deleted');
-        }
-        if (onDeleted) onDeleted(currentPhoto.id);
-        if (currentIndex < photos.length - 1) {
-          setCurrentIndex(currentIndex + 1);
-        } else if (currentIndex > 0) {
-          setCurrentIndex(currentIndex - 1);
-        } else {
+        const updated = localPhotos.filter((p) => p.id !== currentPhoto.id);
+        onDeleted?.(currentPhoto.id);
+        if (updated.length === 0) {
           onClose();
+          return;
+        }
+        setLocalPhotos(updated);
+        // Stay at same index so the next photo slides in; step back if we were at the end
+        if (currentIndex >= updated.length) {
+          setCurrentIndex(updated.length - 1);
         }
       } catch (e: any) {
         console.error('Delete error:', e);
-        if (Platform.OS !== 'web') {
-          Alert.alert('Delete failed', e?.message || 'Unable to delete photo');
-        }
+        Alert.alert('Delete failed', e?.message || 'Unable to delete photo');
+      } finally {
+        setIsDeleting(false);
       }
     };
 
     if (Platform.OS === 'web') {
-      // Web: use confirm() since Alert buttons do not work in RN Web
-      // eslint-disable-next-line no-alert
-      const ok = (globalThis as any).confirm?.('Delete Photo? This action cannot be undone.') ?? false;
-      if (ok) {
-        performDelete();
-      }
+      const ok = (globalThis as any).confirm?.('Delete this photo? This cannot be undone.') ?? false;
+      if (ok) performDelete();
       return;
     }
 
     Alert.alert(
       'Delete Photo',
-      'Are you sure you want to delete this photo? This action cannot be undone.',
+      'Are you sure? This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: performDelete }
+        { text: 'Delete', style: 'destructive', onPress: performDelete },
       ]
     );
   };
@@ -313,7 +315,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
             <Text style={styles.closeButtonText}>×</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>
-            {currentIndex + 1} of {photos.length}
+            {currentIndex + 1} of {localPhotos.length}
           </Text>
           <View style={styles.headerSpacer} />
         </View>
@@ -364,14 +366,18 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
           >
             <BlurView intensity={25} tint="dark" style={StyleSheet.absoluteFillObject as any} pointerEvents="none" />
             <View style={styles.dockContent}>
-              <TouchableOpacity accessibilityRole="button" style={styles.dockButton} onPress={handleDelete}>
-                <Ionicons name="trash-outline" size={24} color="#0A84FF" />
+              <TouchableOpacity accessibilityRole="button" style={styles.dockButton} onPress={handleDelete} disabled={isDeleting}>
+                {isDeleting
+                  ? <ActivityIndicator size="small" color="#0A84FF" />
+                  : <Ionicons name="trash-outline" size={24} color="#0A84FF" />}
               </TouchableOpacity>
               <TouchableOpacity accessibilityRole="button" style={styles.dockButton} onPress={toggleMetadata}>
                 <Ionicons name="information-circle-outline" size={24} color="#0A84FF" />
               </TouchableOpacity>
-              <TouchableOpacity accessibilityRole="button" style={styles.dockButton} onPress={handleDownload}>
-                <Ionicons name="download-outline" size={24} color="#0A84FF" />
+              <TouchableOpacity accessibilityRole="button" style={styles.dockButton} onPress={handleDownload} disabled={isDownloading}>
+                {isDownloading
+                  ? <ActivityIndicator size="small" color="#0A84FF" />
+                  : <Ionicons name="download-outline" size={24} color="#0A84FF" />}
               </TouchableOpacity>
             </View>
           </View>
